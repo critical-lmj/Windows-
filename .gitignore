@@ -1,0 +1,15 @@
+# Build outputs
+*.exe
+*.dll
+*.test
+
+# Runtime logs and temporary files
+*.log
+*.tmp
+
+# Portable Go toolchain, module cache, and build cache
+.runtime/
+
+# IDE settings
+.vscode/
+.idea/
