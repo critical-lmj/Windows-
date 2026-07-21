@@ -90,6 +90,12 @@ func TestTasksForExportUsesSelectionOtherwiseFiltered(t *testing.T) {
 	}
 }
 
+func TestArchiveCompletionRequestsAsyncRefresh(t *testing.T) {
+	if !archiveCompletionRefresh() {
+		t.Fatal("archive completion must refresh the task list asynchronously")
+	}
+}
+
 func makeArchiveWithManifestEntry(t *testing.T, entryName, xmlText, digest string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "invalid.zip")

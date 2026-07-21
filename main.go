@@ -527,10 +527,11 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		updateTaskDetailFromSelection()
 		return 0
 	case msgArchiveDone:
+		debugLog("UI received msgArchiveDone error=%q results=%d", pendingArchiveError, len(pendingTransfer))
 		if pendingArchiveError != "" {
-			finishArchiveOperation("导出失败", pendingArchiveError+"\r\n\r\n"+archiveResultSummary(pendingTransfer, ""), false)
+			finishArchiveOperation("导出失败", pendingArchiveError+"\r\n\r\n"+archiveResultSummary(pendingTransfer, ""), archiveCompletionRefresh())
 		} else {
-			finishArchiveOperation("导出完成", archiveResultSummary(pendingTransfer, pendingArchivePath), false)
+			finishArchiveOperation("导出完成", archiveResultSummary(pendingTransfer, pendingArchivePath), archiveCompletionRefresh())
 		}
 		return 0
 	case msgImportReady:
@@ -1338,18 +1339,28 @@ func beginArchiveOperation(status string) {
 }
 
 func finishArchiveOperation(title, text string, refresh bool) {
+	debugLog("finishArchiveOperation start title=%q refresh=%v", title, refresh)
 	operationBusy = false
 	archiveOperation = false
 	operationStartedAt = time.Time{}
 	setMainToolbarEnabled(true)
 	pendingImportPlan = nil
 	pendingArchiveError = ""
+	debugLog("finishArchiveOperation before message")
 	message(mainWnd, title, text)
+	debugLog("finishArchiveOperation after message")
 	if refresh {
+		debugLog("finishArchiveOperation starts async refresh")
 		refreshTasksAsync()
 		return
 	}
+	debugLog("finishArchiveOperation updates selected detail")
 	updateTaskDetailFromSelection()
+}
+
+// 备份/导出完成后统一走异步刷新，避免在模态完成提示后同步访问 ListView。
+func archiveCompletionRefresh() bool {
+	return true
 }
 
 func selectedTaskForExport() *Task {
@@ -1403,15 +1414,19 @@ func backupAllTasks() {
 func exportTasksAsync(tasks []Task, outputPath, status string) {
 	beginArchiveOperation(status)
 	go func() {
+		debugLog("archive export started taskCount=%d path=%q", len(tasks), outputPath)
 		summary := collectTaskArchiveItems(tasks, exportTaskXML)
+		debugLog("archive export XML collection finished success=%d total=%d", len(summary.Items), len(summary.Results))
 		if len(summary.Items) == 0 {
 			pendingArchiveError = "没有任务能够导出。\r\n\r\n" + archiveResultSummary(summary.Results, "")
 		} else if err := writeTaskArchive(outputPath, "", summary.Items); err != nil {
 			pendingArchiveError = err.Error()
 		} else {
 			pendingArchivePath = outputPath
+			debugLog("archive export ZIP write finished path=%q", outputPath)
 		}
 		pendingTransfer = summary.Results
+		debugLog("archive export posts completion error=%q", pendingArchiveError)
 		win.PostMessage(mainWnd, msgArchiveDone, 0, 0)
 	}()
 }
