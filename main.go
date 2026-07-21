@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -154,6 +155,9 @@ type schedulerExecAction struct {
 }
 
 var (
+	// Win32 窗口消息队列属于创建窗口的 OS 线程；UI 协程不能在阻塞外部命令后迁移到其他线程。
+	uiThreadLocker = runtime.LockOSThread
+
 	// 主窗口和主界面控件句柄。Win32 消息回调会通过这些 HWND 读写控件。
 	hInst               win.HINSTANCE
 	mainWnd             win.HWND
@@ -299,6 +303,7 @@ var (
 )
 
 func main() {
+	lockUIThread()
 	if len(os.Args) > 1 && os.Args[1] == "--save-task" {
 		if err := runSaveTaskCommand(os.Args[2:]); err != nil {
 			os.Exit(1)
@@ -410,6 +415,12 @@ func main() {
 		win.TranslateMessage(&msg)
 		win.DispatchMessage(&msg)
 	}
+}
+
+// lockUIThread 将 GUI 主协程固定在同一个 OS 线程上，保证 GetMessage/DispatchMessage
+// 始终操作创建主窗口的同一条 Win32 消息队列。
+func lockUIThread() {
+	uiThreadLocker()
 }
 
 // wndProc 是主窗口的 Win32 消息处理函数，负责分发创建、调整大小、按钮点击和异步加载结果。

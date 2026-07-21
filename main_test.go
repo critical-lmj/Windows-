@@ -23,6 +23,18 @@ func TestTaskScriptPathUsesStartInForRelativePhpScript(t *testing.T) {
 	}
 }
 
+func TestLockUIThreadUsesConfiguredThreadLocker(t *testing.T) {
+	original := uiThreadLocker
+	defer func() { uiThreadLocker = original }()
+
+	called := false
+	uiThreadLocker = func() { called = true }
+	lockUIThread()
+	if !called {
+		t.Fatal("lockUIThread() did not bind the Win32 UI goroutine to its OS thread")
+	}
+}
+
 func TestTaskScriptPathKeepsAbsolutePhpScript(t *testing.T) {
 	task := Task{
 		TaskToRun: `E:\software\php\php.exe -f "E:\work\scheduled_task\write_md5_log.php"`,
