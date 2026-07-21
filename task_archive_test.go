@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -36,6 +37,46 @@ func TestReadTaskArchiveRejectsTraversalAndBadDigest(t *testing.T) {
 		if _, err := readTaskArchive(path); err == nil {
 			t.Fatalf("expected invalid archive: %s", path)
 		}
+	}
+}
+
+func TestCollectTaskArchiveItemsContinuesAfterExportFailure(t *testing.T) {
+	summary := collectTaskArchiveItems([]Task{{Name: `\Good`}, {Name: `\Bad`}}, func(name string) (string, error) {
+		if name == `\Bad` {
+			return "", errors.New("denied")
+		}
+		return taskXMLWithURI(name), nil
+	})
+	if len(summary.Items) != 1 || summary.Items[0].Name != `\Good` {
+		t.Fatal("good task not collected")
+	}
+	if len(summary.Results) != 2 || summary.Results[1].Err == nil {
+		t.Fatal("failure not retained")
+	}
+}
+
+func TestApplyTaskImportPlanSkipsAndContinuesAfterFailure(t *testing.T) {
+	plan := []TaskImportPlanItem{
+		{Item: TaskArchiveItem{Name: `\Skip`}, Skip: true},
+		{Item: TaskArchiveItem{Name: `\Fail`}, Overwrite: true},
+		{Item: TaskArchiveItem{Name: `\Good`}},
+	}
+	results := applyTaskImportPlan(plan, func(name, _ string) error {
+		if name == `\Fail` {
+			return errors.New("denied")
+		}
+		return nil
+	})
+	if results[0].Err != nil || !results[0].Skipped || results[1].Err == nil || results[2].Err != nil {
+		t.Fatal("unexpected import result")
+	}
+}
+
+func TestBuildTaskImportPlanMarksExistingNames(t *testing.T) {
+	items := []TaskArchiveItem{{Name: `\Existing`}, {Name: `\New`}}
+	plan := buildTaskImportPlan(items, map[string]bool{`\Existing`: true})
+	if !plan[0].Exists || plan[1].Exists {
+		t.Fatal("existing task detection mismatch")
 	}
 }
 

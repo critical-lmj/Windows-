@@ -39,6 +39,25 @@ type TaskArchiveManifest struct {
 	Tasks         []TaskArchiveManifestEntry `json:"tasks"`
 }
 
+// TaskTransferResult 记录一条任务在导入或导出中的最终状态。
+type TaskTransferResult struct {
+	Name    string
+	Skipped bool
+	Err     error
+}
+
+type TaskExportSummary struct {
+	Items   []TaskArchiveItem
+	Results []TaskTransferResult
+}
+
+type TaskImportPlanItem struct {
+	Item      TaskArchiveItem
+	Exists    bool
+	Overwrite bool
+	Skip      bool
+}
+
 type taskArchiveXML struct {
 	RegistrationInfo struct {
 		URI string `xml:"URI"`
@@ -239,4 +258,62 @@ func readArchiveFile(file *zip.File) ([]byte, error) {
 		return nil, fmt.Errorf("备份文件过大：%s", file.Name)
 	}
 	return data, nil
+}
+
+func collectTaskArchiveItems(tasks []Task, exporter func(string) (string, error)) TaskExportSummary {
+	summary := TaskExportSummary{
+		Items:   make([]TaskArchiveItem, 0, len(tasks)),
+		Results: make([]TaskTransferResult, 0, len(tasks)),
+	}
+	for _, task := range tasks {
+		name, nameErr := normalizeTaskName(task.Name)
+		if nameErr != nil {
+			summary.Results = append(summary.Results, TaskTransferResult{Name: task.Name, Err: nameErr})
+			continue
+		}
+		xmlText, exportErr := exporter(name)
+		if exportErr != nil {
+			summary.Results = append(summary.Results, TaskTransferResult{Name: name, Err: exportErr})
+			continue
+		}
+		xmlText = normalizeTaskXMLText(xmlText)
+		xmlName, xmlErr := taskNameFromXML(xmlText)
+		if xmlErr != nil {
+			summary.Results = append(summary.Results, TaskTransferResult{Name: name, Err: xmlErr})
+			continue
+		}
+		if xmlName != name {
+			summary.Results = append(summary.Results, TaskTransferResult{Name: name, Err: errors.New("导出的 XML 任务名称不一致")})
+			continue
+		}
+		summary.Items = append(summary.Items, TaskArchiveItem{Name: name, XML: xmlText})
+		summary.Results = append(summary.Results, TaskTransferResult{Name: name})
+	}
+	return summary
+}
+
+func buildTaskImportPlan(items []TaskArchiveItem, existing map[string]bool) []TaskImportPlanItem {
+	plan := make([]TaskImportPlanItem, 0, len(items))
+	for _, item := range items {
+		name, err := normalizeTaskName(item.Name)
+		if err != nil {
+			plan = append(plan, TaskImportPlanItem{Item: item, Skip: true})
+			continue
+		}
+		item.Name = name
+		plan = append(plan, TaskImportPlanItem{Item: item, Exists: existing[name]})
+	}
+	return plan
+}
+
+func applyTaskImportPlan(plan []TaskImportPlanItem, restorer func(string, string) error) []TaskTransferResult {
+	results := make([]TaskTransferResult, 0, len(plan))
+	for _, item := range plan {
+		result := TaskTransferResult{Name: item.Item.Name, Skipped: item.Skip}
+		if !item.Skip {
+			result.Err = restorer(item.Item.Name, item.Item.XML)
+		}
+		results = append(results, result)
+	}
+	return results
 }
