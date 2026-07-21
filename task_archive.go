@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -76,6 +77,36 @@ func taskNameFromXML(xmlText string) (string, error) {
 	return normalizeTaskName(definition.RegistrationInfo.URI)
 }
 
+// archiveTaskXMLFileName 将任务路径转换为 ZIP 内可读、可在 Windows 解压的扁平 XML 文件名。
+func archiveTaskXMLFileName(name string) string {
+	name = strings.TrimPrefix(strings.TrimSpace(name), `\`)
+	name = strings.ReplaceAll(name, `\`, "_")
+	var out strings.Builder
+	for _, r := range name {
+		if unicode.IsControl(r) || strings.ContainsRune(`<>:"/\\|?*`, r) {
+			out.WriteByte('_')
+			continue
+		}
+		out.WriteRune(r)
+	}
+	stem := strings.Trim(out.String(), " .")
+	if stem == "" {
+		stem = "task"
+	}
+	return stem + ".xml"
+}
+
+// uniqueArchiveTaskXMLFileName 为扁平化后冲突的名称稳定增加 _2、_3 等后缀。
+func uniqueArchiveTaskXMLFileName(name string, used map[string]bool) string {
+	filename := archiveTaskXMLFileName(name)
+	stem := strings.TrimSuffix(filename, ".xml")
+	for suffix := 2; used[strings.ToLower(filename)]; suffix++ {
+		filename = fmt.Sprintf("%s_%d.xml", stem, suffix)
+	}
+	used[strings.ToLower(filename)] = true
+	return filename
+}
+
 func writeTaskArchive(outputPath, source string, items []TaskArchiveItem) (err error) {
 	if len(items) == 0 {
 		return errors.New("没有可导出的任务。")
@@ -110,7 +141,8 @@ func writeTaskArchive(outputPath, source string, items []TaskArchiveItem) (err e
 		Tasks:         make([]TaskArchiveManifestEntry, 0, len(items)),
 	}
 	names := make(map[string]bool, len(items))
-	for index, item := range items {
+	usedFiles := make(map[string]bool, len(items))
+	for _, item := range items {
 		name, normalizeErr := normalizeTaskName(item.Name)
 		if normalizeErr != nil {
 			return normalizeErr
@@ -127,7 +159,7 @@ func writeTaskArchive(outputPath, source string, items []TaskArchiveItem) (err e
 		if xmlName != name {
 			return fmt.Errorf("任务 XML 名称与任务名称不一致：%s", name)
 		}
-		filename := fmt.Sprintf("tasks/%04d.xml", index+1)
+		filename := "tasks/" + uniqueArchiveTaskXMLFileName(name, usedFiles)
 		entry, createErr := writer.Create(filename)
 		if createErr != nil {
 			return createErr

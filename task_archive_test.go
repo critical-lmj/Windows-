@@ -3,6 +3,8 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -20,12 +22,34 @@ func TestTaskArchiveRoundTripKeepsTaskNameAndXML(t *testing.T) {
 	if err := writeTaskArchive(path, "SERVER-A", items); err != nil {
 		t.Fatal(err)
 	}
+	manifest := readArchiveManifest(t, path)
+	if len(manifest.Tasks) != 1 || manifest.Tasks[0].File != "tasks/Folder_Daily.xml" {
+		t.Fatalf("manifest filename = %#v, want tasks/Folder_Daily.xml", manifest.Tasks)
+	}
 	got, err := readTaskArchive(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].Name != items[0].Name || got[0].XML != items[0].XML {
 		t.Fatalf("round trip mismatch: %#v", got)
+	}
+}
+
+func TestArchiveTaskXMLFileNameFlattensTaskPath(t *testing.T) {
+	if got := archiveTaskXMLFileName(`\DouyinUser\DouyinGuard\LaunchDouyinGuard`); got != "DouyinUser_DouyinGuard_LaunchDouyinGuard.xml" {
+		t.Fatalf("archiveTaskXMLFileName() = %q", got)
+	}
+	if got := archiveTaskXMLFileName(`\A:B*?`); got != "A_B__.xml" {
+		t.Fatalf("archiveTaskXMLFileName() sanitization = %q", got)
+	}
+}
+
+func TestUniqueArchiveTaskXMLFileNameAvoidsFlattenedCollisions(t *testing.T) {
+	used := map[string]bool{}
+	first := uniqueArchiveTaskXMLFileName(`\A\B`, used)
+	second := uniqueArchiveTaskXMLFileName(`\A_B`, used)
+	if first != "A_B.xml" || second != "A_B_2.xml" {
+		t.Fatalf("got %q and %q", first, second)
 	}
 }
 
@@ -37,6 +61,19 @@ func TestReadTaskArchiveRejectsTraversalAndBadDigest(t *testing.T) {
 		if _, err := readTaskArchive(path); err == nil {
 			t.Fatalf("expected invalid archive: %s", path)
 		}
+	}
+}
+
+func TestReadTaskArchiveSupportsLegacyNumericEntryName(t *testing.T) {
+	xmlText := taskXMLWithURI(`\Legacy`)
+	digest := sha256.Sum256([]byte(xmlText))
+	path := makeArchiveWithManifestEntry(t, "tasks/0001.xml", xmlText, hex.EncodeToString(digest[:]))
+	items, err := readTaskArchive(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Name != `\Legacy` {
+		t.Fatalf("legacy archive items = %#v", items)
 	}
 }
 
@@ -96,14 +133,44 @@ func TestArchiveCompletionRequestsAsyncRefresh(t *testing.T) {
 	}
 }
 
+func readArchiveManifest(t *testing.T, path string) TaskArchiveManifest {
+	t.Helper()
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	for _, file := range reader.File {
+		if file.Name != "manifest.json" {
+			continue
+		}
+		content, openErr := file.Open()
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		defer content.Close()
+		var manifest TaskArchiveManifest
+		if decodeErr := json.NewDecoder(content).Decode(&manifest); decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		return manifest
+	}
+	t.Fatal("manifest.json missing")
+	return TaskArchiveManifest{}
+}
+
 func makeArchiveWithManifestEntry(t *testing.T, entryName, xmlText, digest string) string {
 	t.Helper()
+	name, err := taskNameFromXML(xmlText)
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(t.TempDir(), "invalid.zip")
 	var buffer bytes.Buffer
 	writer := zip.NewWriter(&buffer)
 	manifest := TaskArchiveManifest{
 		FormatVersion: taskArchiveFormatVersion,
-		Tasks:         []TaskArchiveManifestEntry{{Name: `\Bad`, File: entryName, SHA256: digest}},
+		Tasks:         []TaskArchiveManifestEntry{{Name: name, File: entryName, SHA256: digest}},
 	}
 	manifestFile, err := writer.Create("manifest.json")
 	if err != nil {
