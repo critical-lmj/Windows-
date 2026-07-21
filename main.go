@@ -173,6 +173,9 @@ var (
 	detailGroup         win.HWND
 	refreshButton       win.HWND
 	createButtonHwnd    win.HWND
+	importButton        win.HWND
+	exportButton        win.HWND
+	backupButton        win.HWND
 	editButton          win.HWND
 	runButton           win.HWND
 	endButton           win.HWND
@@ -194,6 +197,7 @@ var (
 	viewTasks           []Task
 	loadingTasks        bool
 	operationBusy       bool
+	archiveOperation    bool
 	loadingStartedAt    time.Time
 	operationStartedAt  time.Time
 	lastWatchdogLog     time.Time
@@ -206,6 +210,10 @@ var (
 	lastActionMessage   string
 	lastWizardTitle     string
 	lastWizardMessage   string
+	pendingImportPlan   []TaskImportPlanItem
+	pendingTransfer     []TaskTransferResult
+	pendingArchiveError string
+	pendingArchivePath  string
 	wizardSaving        bool
 	wizardInitialConfig *TaskCreateConfig
 	wizardOriginalName  string
@@ -227,12 +235,18 @@ const (
 	idDelete          = 1010
 	idList            = 1011
 	idEdit            = 1012
+	idImport          = 1013
+	idExport          = 1014
+	idBackup          = 1015
 	msgEditLoaded     = win.WM_APP + 4
 	msgEditFailed     = win.WM_APP + 5
 	msgActionDone     = win.WM_APP + 6
 	msgActionFailed   = win.WM_APP + 7
 	msgWizardSaved    = win.WM_APP + 8
 	msgWizardSaveFail = win.WM_APP + 9
+	msgArchiveDone    = win.WM_APP + 10
+	msgImportReady    = win.WM_APP + 11
+	msgImportDone     = win.WM_APP + 12
 	msgCreateTask     = win.WM_APP + 1
 	msgTasksLoaded    = win.WM_APP + 2
 	msgTasksFailed    = win.WM_APP + 3
@@ -442,8 +456,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		debugLog("UI received msgTasksLoaded: %d tasks", len(pendingTasks))
 		loadingTasks = false
 		loadingStartedAt = time.Time{}
-		win.EnableWindow(refreshButton, true)
-		win.EnableWindow(createButtonHwnd, true)
+		setMainToolbarEnabled(true)
 		allTasks = pendingTasks
 		pendingTasks = nil
 		applyFilter()
@@ -452,8 +465,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		debugLog("UI received msgTasksFailed: %s", lastLoadError)
 		loadingTasks = false
 		loadingStartedAt = time.Time{}
-		win.EnableWindow(refreshButton, true)
-		win.EnableWindow(createButtonHwnd, true)
+		setMainToolbarEnabled(true)
 		updateActionButtons(nil)
 		setWindowText(statLabel, "读取失败")
 		message(mainWnd, "读取失败", lastLoadError)
@@ -462,8 +474,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		debugLog("UI received msgEditLoaded: %s", pendingEditOriginal)
 		operationBusy = false
 		operationStartedAt = time.Time{}
-		win.EnableWindow(refreshButton, true)
-		win.EnableWindow(createButtonHwnd, true)
+		setMainToolbarEnabled(true)
 		wizardInitialConfig = &pendingEditConfig
 		wizardOriginalName = pendingEditOriginal
 		showTaskWizard()
@@ -473,8 +484,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		debugLog("UI received msgEditFailed: %s", lastEditError)
 		operationBusy = false
 		operationStartedAt = time.Time{}
-		win.EnableWindow(refreshButton, true)
-		win.EnableWindow(createButtonHwnd, true)
+		setMainToolbarEnabled(true)
 		updateTaskDetailFromSelection()
 		message(mainWnd, "无法修改", lastEditError)
 		return 0
@@ -482,8 +492,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		debugLog("UI received msgActionDone: %s", lastActionTitle)
 		operationBusy = false
 		operationStartedAt = time.Time{}
-		win.EnableWindow(refreshButton, true)
-		win.EnableWindow(createButtonHwnd, true)
+		setMainToolbarEnabled(true)
 		message(mainWnd, lastActionTitle, lastActionMessage)
 		refreshTasksAsync()
 		return 0
@@ -491,8 +500,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		debugLog("UI received msgActionFailed: %s", lastActionMessage)
 		operationBusy = false
 		operationStartedAt = time.Time{}
-		win.EnableWindow(refreshButton, true)
-		win.EnableWindow(createButtonHwnd, true)
+		setMainToolbarEnabled(true)
 		updateTaskDetailFromSelection()
 		message(mainWnd, lastActionTitle, lastActionMessage)
 		return 0
@@ -501,8 +509,7 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		operationBusy = false
 		operationStartedAt = time.Time{}
 		wizardSaving = false
-		win.EnableWindow(refreshButton, true)
-		win.EnableWindow(createButtonHwnd, true)
+		setMainToolbarEnabled(true)
 		message(wizardWnd, lastWizardTitle, lastWizardMessage)
 		win.DestroyWindow(wizardWnd)
 		refreshTasksAsync()
@@ -512,13 +519,33 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		operationBusy = false
 		operationStartedAt = time.Time{}
 		wizardSaving = false
-		win.EnableWindow(refreshButton, true)
-		win.EnableWindow(createButtonHwnd, true)
+		setMainToolbarEnabled(true)
 		if wizardSubmitButton != 0 {
 			win.EnableWindow(wizardSubmitButton, true)
 		}
 		message(wizardWnd, lastWizardTitle, lastWizardMessage)
 		updateTaskDetailFromSelection()
+		return 0
+	case msgArchiveDone:
+		if pendingArchiveError != "" {
+			finishArchiveOperation("导出失败", pendingArchiveError+"\r\n\r\n"+archiveResultSummary(pendingTransfer, ""), false)
+		} else {
+			finishArchiveOperation("导出完成", archiveResultSummary(pendingTransfer, pendingArchivePath), false)
+		}
+		return 0
+	case msgImportReady:
+		if pendingArchiveError != "" {
+			finishArchiveOperation("导入失败", pendingArchiveError, false)
+			return 0
+		}
+		if !confirmImportPlan(pendingImportPlan) {
+			finishArchiveOperation("已取消导入", "未修改任何任务。", false)
+			return 0
+		}
+		startTaskImportAsync(pendingImportPlan)
+		return 0
+	case msgImportDone:
+		finishArchiveOperation("导入完成", archiveResultSummary(pendingTransfer, ""), true)
 		return 0
 	case win.WM_DESTROY:
 		win.KillTimer(hwnd, idWatchdogTimer)
@@ -574,6 +601,9 @@ func createControls(hwnd win.HWND) {
 	comboAdd(statusCombo, "仅禁用")
 	win.SendMessage(statusCombo, win.CB_SETCURSEL, 0, 0)
 
+	backupButton = createButton(hwnd, "备份全部", 798, 91, 88, 30, idBackup)
+	exportButton = createButton(hwnd, "导出", 894, 91, 76, 30, idExport)
+	importButton = createButton(hwnd, "导入", 978, 91, 76, 30, idImport)
 	refreshButton = createButton(hwnd, "刷新", 1110, 91, 76, 30, idRefresh)
 	createButtonHwnd = createButton(hwnd, "新建任务", 1194, 91, 96, 30, idCreate)
 
@@ -660,6 +690,9 @@ func layoutControls(hwnd win.HWND) {
 		win.MoveWindow(searchScopeLabel, 360, 96, 68, 24, true)
 		win.MoveWindow(filterFieldCombo, 432, 91, 118, 220, true)
 		win.MoveWindow(statusCombo, 560, 91, 116, 220, true)
+		win.MoveWindow(backupButton, width-522, 91, 88, 30, true)
+		win.MoveWindow(exportButton, width-426, 91, 76, 30, true)
+		win.MoveWindow(importButton, width-330, 91, 76, 30, true)
 		win.MoveWindow(refreshButton, width-202, 91, 76, 30, true)
 		win.MoveWindow(createButtonHwnd, width-118, 91, 96, 30, true)
 		win.MoveWindow(actionLabel, margin, 132, 82, 24, true)
@@ -691,6 +724,12 @@ func handleCommand(id, code uint16) {
 		}
 	case idRefresh:
 		refreshTasksAsync()
+	case idImport:
+		chooseAndImportTasks()
+	case idExport:
+		exportSelectedOrFiltered()
+	case idBackup:
+		backupAllTasks()
 	case idCreate:
 		debugLog("new task button clicked")
 		wizardInitialConfig = nil
@@ -821,8 +860,7 @@ func refreshTasksAsync() {
 	debugLog("refreshTasksAsync start")
 	loadingTasks = true
 	loadingStartedAt = time.Now()
-	win.EnableWindow(refreshButton, false)
-	win.EnableWindow(createButtonHwnd, false)
+	setMainToolbarEnabled(false)
 	updateActionButtons(nil)
 	setWindowText(statLabel, "正在读取定时任务，请稍候...")
 	if listView != 0 {
@@ -964,18 +1002,16 @@ func handleWatchdogTick() {
 		loadingTasks = false
 		loadingStartedAt = time.Time{}
 		pendingTasks = nil
-		win.EnableWindow(refreshButton, true)
-		win.EnableWindow(createButtonHwnd, true)
+		setMainToolbarEnabled(true)
 		setWindowText(statLabel, "读取任务超时，请点击刷新重试。")
 		updateTaskDetailFromSelection()
 	}
-	if operationBusy && !operationStartedAt.IsZero() && now.Sub(operationStartedAt) > watchdogStaleAfter {
+	if operationBusy && !archiveOperation && !operationStartedAt.IsZero() && now.Sub(operationStartedAt) > watchdogStaleAfter {
 		debugLog("watchdog reset stale operation state after %s", now.Sub(operationStartedAt).Round(time.Second))
 		operationBusy = false
 		operationStartedAt = time.Time{}
 		wizardSaving = false
-		win.EnableWindow(refreshButton, true)
-		win.EnableWindow(createButtonHwnd, true)
+		setMainToolbarEnabled(true)
 		if wizardSubmitButton != 0 {
 			win.EnableWindow(wizardSubmitButton, true)
 		}
@@ -1090,8 +1126,7 @@ func editSelectedTask() {
 	}
 	operationBusy = true
 	operationStartedAt = time.Now()
-	win.EnableWindow(refreshButton, false)
-	win.EnableWindow(createButtonHwnd, false)
+	setMainToolbarEnabled(false)
 	updateActionButtons(nil)
 	setWindowText(statLabel, "正在读取任务定义，请稍候...")
 	taskName := task.Name
@@ -1261,8 +1296,7 @@ func taskAction(action string) {
 	}
 	operationBusy = true
 	operationStartedAt = time.Now()
-	win.EnableWindow(refreshButton, false)
-	win.EnableWindow(createButtonHwnd, false)
+	setMainToolbarEnabled(false)
 	updateActionButtons(nil)
 	setWindowText(statLabel, "正在执行操作，请稍候...")
 	go func() {
@@ -1284,6 +1318,213 @@ func taskAction(action string) {
 		lastActionMessage = text
 		win.PostMessage(mainWnd, msgActionDone, 0, 0)
 	}()
+}
+
+func setMainToolbarEnabled(enabled bool) {
+	for _, button := range []win.HWND{refreshButton, createButtonHwnd, importButton, exportButton, backupButton} {
+		if button != 0 {
+			win.EnableWindow(button, enabled)
+		}
+	}
+}
+
+func beginArchiveOperation(status string) {
+	operationBusy = true
+	archiveOperation = true
+	operationStartedAt = time.Now()
+	setMainToolbarEnabled(false)
+	updateActionButtons(nil)
+	setWindowText(statLabel, status)
+}
+
+func finishArchiveOperation(title, text string, refresh bool) {
+	operationBusy = false
+	archiveOperation = false
+	operationStartedAt = time.Time{}
+	setMainToolbarEnabled(true)
+	pendingImportPlan = nil
+	pendingArchiveError = ""
+	message(mainWnd, title, text)
+	if refresh {
+		refreshTasksAsync()
+		return
+	}
+	updateTaskDetailFromSelection()
+}
+
+func selectedTaskForExport() *Task {
+	index := int(win.SendMessage(listView, win.LVM_GETNEXTITEM, ^uintptr(0), win.LVNI_SELECTED))
+	if index < 0 || index >= len(viewTasks) {
+		return nil
+	}
+	selected := viewTasks[index]
+	return &selected
+}
+
+func tasksForExport(selected *Task, filtered []Task) []Task {
+	if selected != nil {
+		return []Task{*selected}
+	}
+	return append([]Task(nil), filtered...)
+}
+
+func exportSelectedOrFiltered() {
+	if operationBusy || loadingTasks {
+		return
+	}
+	tasks := tasksForExport(selectedTaskForExport(), viewTasks)
+	if len(tasks) == 0 {
+		message(mainWnd, "无法导出", "当前没有可导出的任务。")
+		return
+	}
+	path := saveTaskArchiveDialog("导出计划任务", "TaskExport_"+time.Now().Format("20060102_150405")+".zip")
+	if path == "" {
+		return
+	}
+	exportTasksAsync(tasks, path, "正在导出任务，请稍候...")
+}
+
+func backupAllTasks() {
+	if operationBusy || loadingTasks {
+		return
+	}
+	tasks := append([]Task(nil), allTasks...)
+	if len(tasks) == 0 {
+		message(mainWnd, "无法备份", "本机没有可备份的任务。")
+		return
+	}
+	path := saveTaskArchiveDialog("备份全部计划任务", "TaskBackup_"+time.Now().Format("20060102_150405")+".zip")
+	if path == "" {
+		return
+	}
+	exportTasksAsync(tasks, path, "正在备份全部任务，请稍候...")
+}
+
+func exportTasksAsync(tasks []Task, outputPath, status string) {
+	beginArchiveOperation(status)
+	go func() {
+		summary := collectTaskArchiveItems(tasks, exportTaskXML)
+		if len(summary.Items) == 0 {
+			pendingArchiveError = "没有任务能够导出。\r\n\r\n" + archiveResultSummary(summary.Results, "")
+		} else if err := writeTaskArchive(outputPath, "", summary.Items); err != nil {
+			pendingArchiveError = err.Error()
+		} else {
+			pendingArchivePath = outputPath
+		}
+		pendingTransfer = summary.Results
+		win.PostMessage(mainWnd, msgArchiveDone, 0, 0)
+	}()
+}
+
+func chooseAndImportTasks() {
+	if operationBusy || loadingTasks {
+		return
+	}
+	path := openTaskImportDialog()
+	if path == "" {
+		return
+	}
+	startImportPreflight(path)
+}
+
+func startImportPreflight(inputPath string) {
+	beginArchiveOperation("正在检查导入文件，请稍候...")
+	knownTasks := make(map[string]bool, len(allTasks))
+	for _, task := range allTasks {
+		if name, err := normalizeTaskName(task.Name); err == nil {
+			knownTasks[name] = true
+		}
+	}
+	go func() {
+		items, err := readTaskImportFile(inputPath)
+		if err != nil {
+			pendingArchiveError = err.Error()
+			pendingImportPlan = nil
+		} else {
+			pendingArchiveError = ""
+			pendingImportPlan = buildTaskImportPlan(items, knownTasks)
+		}
+		win.PostMessage(mainWnd, msgImportReady, 0, 0)
+	}()
+}
+
+func confirmImportPlan(plan []TaskImportPlanItem) bool {
+	if len(plan) == 0 {
+		message(mainWnd, "无法导入", "导入文件中没有任务。")
+		return false
+	}
+	message(mainWnd, "导入预检", importPlanSummary(plan))
+	for index := range plan {
+		if !plan[index].Exists {
+			continue
+		}
+		text := "目标服务器已存在同名任务：\r\n" + plan[index].Item.Name + "\r\n\r\n选择“是”覆盖，选择“否”跳过，选择“取消”终止本次导入。"
+		result := win.MessageBox(mainWnd, utf16(text), utf16("导入冲突"), win.MB_YESNOCANCEL|win.MB_ICONQUESTION)
+		switch result {
+		case win.IDYES:
+			plan[index].Overwrite = true
+		case win.IDNO:
+			plan[index].Skip = true
+		default:
+			return false
+		}
+	}
+	pendingImportPlan = plan
+	return true
+}
+
+func startTaskImportAsync(plan []TaskImportPlanItem) {
+	setWindowText(statLabel, "正在导入任务，请稍候...")
+	go func() {
+		pendingTransfer = applyTaskImportPlan(plan, restoreTaskXML)
+		win.PostMessage(mainWnd, msgImportDone, 0, 0)
+	}()
+}
+
+func importPlanSummary(plan []TaskImportPlanItem) string {
+	var lines []string
+	conflicts := 0
+	for _, item := range plan {
+		if item.Exists {
+			conflicts++
+		}
+		command := "—"
+		var definition schedulerTaskXML
+		if xml.Unmarshal([]byte(item.Item.XML), &definition) == nil && len(definition.Actions.Exec) == 1 {
+			command = strings.TrimSpace(definition.Actions.Exec[0].Command + " " + definition.Actions.Exec[0].Arguments)
+		}
+		lines = append(lines, item.Item.Name+"\r\n  "+command)
+	}
+	if len(lines) > 12 {
+		lines = append(lines[:12], fmt.Sprintf("……其余 %d 个任务", len(plan)-12))
+	}
+	return fmt.Sprintf("共检测到 %d 个任务，其中同名冲突 %d 个。\r\n\r\n%s", len(plan), conflicts, strings.Join(lines, "\r\n"))
+}
+
+func archiveResultSummary(results []TaskTransferResult, outputPath string) string {
+	success, skipped, failed := 0, 0, 0
+	var details []string
+	for _, result := range results {
+		switch {
+		case result.Err != nil:
+			failed++
+			if len(details) < 12 {
+				details = append(details, result.Name+"："+result.Err.Error())
+			}
+		case result.Skipped:
+			skipped++
+		default:
+			success++
+		}
+	}
+	text := fmt.Sprintf("成功 %d 个，跳过 %d 个，失败 %d 个。", success, skipped, failed)
+	if outputPath != "" {
+		text = "文件已保存：\r\n" + outputPath + "\r\n\r\n" + text
+	}
+	if len(details) > 0 {
+		text += "\r\n\r\n失败详情：\r\n" + strings.Join(details, "\r\n")
+	}
+	return text
 }
 
 // createBasicTask 从弹窗控件读取输入，构造 schtasks 参数并创建任务。
@@ -1316,8 +1557,7 @@ func createBasicTask() {
 	if wizardSubmitButton != 0 {
 		win.EnableWindow(wizardSubmitButton, false)
 	}
-	win.EnableWindow(refreshButton, false)
-	win.EnableWindow(createButtonHwnd, false)
+	setMainToolbarEnabled(false)
 	setWindowText(statLabel, "正在保存任务，请稍候...")
 	go func() {
 		if err := saveTaskConfigIsolated(cfg, originalName, true); err != nil {
@@ -3234,6 +3474,36 @@ func openFileDialog(parent win.HWND) string {
 		"if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [IO.File]::WriteAllText($env:CODEX_PICKER_OUT, $d.FileName, [System.Text.Encoding]::UTF8) }",
 	}, "\r\n")
 	return runExternalPicker(parent, script, "选择程序或脚本失败")
+}
+
+func openTaskImportDialog() string {
+	script := strings.Join([]string{
+		"Add-Type -AssemblyName System.Windows.Forms",
+		"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+		"$d = New-Object System.Windows.Forms.OpenFileDialog",
+		"$d.Title = '选择任务备份包或 XML 文件'",
+		"$d.Filter = '任务备份包或 XML (*.zip;*.xml)|*.zip;*.xml|任务备份包 (*.zip)|*.zip|任务 XML (*.xml)|*.xml'",
+		"$d.CheckFileExists = $true",
+		"$d.CheckPathExists = $true",
+		"if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [IO.File]::WriteAllText($env:CODEX_PICKER_OUT, $d.FileName, [System.Text.Encoding]::UTF8) }",
+	}, "\r\n")
+	return runExternalPicker(mainWnd, script, "选择导入文件失败")
+}
+
+func saveTaskArchiveDialog(title, defaultName string) string {
+	script := strings.Join([]string{
+		"Add-Type -AssemblyName System.Windows.Forms",
+		"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+		"$d = New-Object System.Windows.Forms.SaveFileDialog",
+		"$d.Title = '" + title + "'",
+		"$d.Filter = '任务备份包 (*.zip)|*.zip'",
+		"$d.DefaultExt = 'zip'",
+		"$d.AddExtension = $true",
+		"$d.OverwritePrompt = $true",
+		"$d.FileName = '" + defaultName + "'",
+		"if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [IO.File]::WriteAllText($env:CODEX_PICKER_OUT, $d.FileName, [System.Text.Encoding]::UTF8) }",
+	}, "\r\n")
+	return runExternalPicker(mainWnd, script, "选择保存位置失败")
 }
 
 func openFolderDialog(parent win.HWND) string {

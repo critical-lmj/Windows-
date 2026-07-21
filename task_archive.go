@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -232,6 +233,32 @@ func readTaskArchive(inputPath string) ([]TaskArchiveItem, error) {
 		items = append(items, TaskArchiveItem{Name: name, XML: xmlText})
 	}
 	return items, nil
+}
+
+func readTaskImportFile(inputPath string) ([]TaskArchiveItem, error) {
+	if strings.EqualFold(filepath.Ext(inputPath), ".zip") {
+		return readTaskArchive(inputPath)
+	}
+	if !strings.EqualFold(filepath.Ext(inputPath), ".xml") {
+		return nil, errors.New("仅支持 ZIP 备份包或 XML 任务文件。")
+	}
+	info, err := os.Stat(inputPath)
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() > maxTaskArchiveXMLBytes {
+		return nil, errors.New("XML 任务文件过大。")
+	}
+	data, err := os.ReadFile(inputPath)
+	if err != nil {
+		return nil, err
+	}
+	xmlText := normalizeTaskXMLText(string(data))
+	name, err := taskNameFromXML(xmlText)
+	if err != nil {
+		return nil, err
+	}
+	return []TaskArchiveItem{{Name: name, XML: xmlText}}, nil
 }
 
 func safeArchiveEntryName(name string) bool {

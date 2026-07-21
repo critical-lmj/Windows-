@@ -80,6 +80,16 @@ func TestBuildTaskImportPlanMarksExistingNames(t *testing.T) {
 	}
 }
 
+func TestTasksForExportUsesSelectionOtherwiseFiltered(t *testing.T) {
+	all := []Task{{Name: `\A`}, {Name: `\B`}}
+	if got := tasksForExport(&all[1], all); len(got) != 1 || got[0].Name != `\B` {
+		t.Fatal("selected task scope mismatch")
+	}
+	if got := tasksForExport(nil, all); len(got) != 2 {
+		t.Fatal("filtered task scope mismatch")
+	}
+}
+
 func makeArchiveWithManifestEntry(t *testing.T, entryName, xmlText, digest string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "invalid.zip")
