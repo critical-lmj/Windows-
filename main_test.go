@@ -35,6 +35,22 @@ func TestLockUIThreadUsesConfiguredThreadLocker(t *testing.T) {
 	}
 }
 
+func TestDefaultTaskSelectionIndexDoesNotSelectAfterRender(t *testing.T) {
+	for _, count := range []int{0, 1, 3} {
+		if got := defaultTaskSelectionIndex(count); got != -1 {
+			t.Fatalf("defaultTaskSelectionIndex(%d) = %d, want -1", count, got)
+		}
+	}
+}
+
+func TestTasksForExportWithoutSelectionKeepsAllFilteredTasks(t *testing.T) {
+	filtered := []Task{{Name: `\A`}, {Name: `\B`}, {Name: `\C`}}
+	got := tasksForExport(nil, filtered)
+	if len(got) != len(filtered) {
+		t.Fatalf("tasksForExport(nil, filtered) returned %d tasks, want %d", len(got), len(filtered))
+	}
+}
+
 func TestTaskScriptPathKeepsAbsolutePhpScript(t *testing.T) {
 	task := Task{
 		TaskToRun: `E:\software\php\php.exe -f "E:\work\scheduled_task\write_md5_log.php"`,

@@ -925,13 +925,19 @@ func renderList() {
 		values := []string{task.ShortName, task.Status, task.NextRunTime, task.LastRunTime, task.LastResult, task.ScheduleType, task.Location, task.TaskToRun}
 		insertItem(i, values)
 	}
-	if len(viewTasks) > 0 {
-		item := win.LVITEM{StateMask: win.LVIS_SELECTED, State: win.LVIS_SELECTED}
-		win.SendMessage(listView, win.LVM_SETITEMSTATE, 0, uintptr(unsafe.Pointer(&item)))
-		updateTaskDetail(viewTasks[0])
+	if index := defaultTaskSelectionIndex(len(viewTasks)); index >= 0 && index < len(viewTasks) {
+		item := win.LVITEM{IItem: int32(index), StateMask: win.LVIS_SELECTED, State: win.LVIS_SELECTED}
+		win.SendMessage(listView, win.LVM_SETITEMSTATE, uintptr(index), uintptr(unsafe.Pointer(&item)))
+		updateTaskDetail(viewTasks[index])
 		return
 	}
 	updateTaskDetail()
+}
+
+// defaultTaskSelectionIndex 返回列表重绘后的默认选中项；-1 表示保持无选中状态。
+// 这样“导出”只有在用户主动选中任务时才导出单项。
+func defaultTaskSelectionIndex(_ int) int {
+	return -1
 }
 
 func updateTaskDetailFromSelection() {
@@ -948,10 +954,6 @@ func updateTaskDetail(tasks ...Task) {
 		return
 	}
 	if len(tasks) == 0 {
-		if len(viewTasks) == 1 {
-			updateTaskDetail(viewTasks[0])
-			return
-		}
 		setWindowText(detailEdit, "选择一条任务后，这里会显示完整配置。\r\n\r\n提示：浅绿色表示正在运行，灰色表示已禁用。")
 		updateActionButtons(nil)
 		return
