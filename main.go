@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"runtime/debug"
 	"sort"
@@ -1906,6 +1907,27 @@ func normalizeTaskXMLText(value string) string {
 	return value
 }
 
+var xmlEncodingDeclaration = regexp.MustCompile(`(?i)(<\?xml[^>]*\bencoding\s*=\s*["'])[^"']*(["'])`)
+
+// encodeTaskXMLForSchtasks 将内部 UTF-8 XML 转为 Server 2008 R2 schtasks 可稳定读取的
+// UTF-16LE（带 BOM）文件内容；声明和字节编码必须匹配。
+func encodeTaskXMLForSchtasks(definition string) []byte {
+	text := normalizeTaskXMLText(definition)
+	if xmlEncodingDeclaration.MatchString(text) {
+		text = xmlEncodingDeclaration.ReplaceAllString(text, `${1}UTF-16${2}`)
+	} else {
+		text = `<?xml version="1.0" encoding="UTF-16"?>` + "\r\n" + text
+	}
+	chars := unicodeutf16.Encode([]rune(text))
+	data := make([]byte, 2+len(chars)*2)
+	data[0], data[1] = 0xff, 0xfe
+	for index, ch := range chars {
+		data[2+index*2] = byte(ch)
+		data[3+index*2] = byte(ch >> 8)
+	}
+	return data
+}
+
 func restoreTaskXML(name, definition string) error {
 	file, err := os.CreateTemp("", "task-scheduler-restore-*.xml")
 	if err != nil {
@@ -1913,7 +1935,7 @@ func restoreTaskXML(name, definition string) error {
 	}
 	path := file.Name()
 	defer os.Remove(path)
-	if _, err = file.WriteString(normalizeTaskXMLText(definition)); err != nil {
+	if _, err = file.Write(encodeTaskXMLForSchtasks(definition)); err != nil {
 		file.Close()
 		return err
 	}

@@ -51,6 +51,21 @@ func TestTasksForExportWithoutSelectionKeepsAllFilteredTasks(t *testing.T) {
 	}
 }
 
+func TestEncodeTaskXMLForSchtasksUsesUTF16LEWithMatchingDeclaration(t *testing.T) {
+	input := `<?xml version="1.0" encoding="UTF-8"?><Task><RegistrationInfo><URI>\RestoreProbe</URI></RegistrationInfo></Task>`
+	data := encodeTaskXMLForSchtasks(input)
+	if len(data) < 4 || data[0] != 0xff || data[1] != 0xfe {
+		t.Fatalf("XML bytes must begin with UTF-16LE BOM, got % x", data)
+	}
+	text := decodeUTF16Bytes(data[2:], false)
+	if !strings.Contains(text, `encoding="UTF-16"`) {
+		t.Fatalf("XML declaration = %q, want UTF-16", text)
+	}
+	if !strings.Contains(text, `<URI>\RestoreProbe</URI>`) {
+		t.Fatalf("XML content changed: %q", text)
+	}
+}
+
 func TestTaskScriptPathKeepsAbsolutePhpScript(t *testing.T) {
 	task := Task{
 		TaskToRun: `E:\software\php\php.exe -f "E:\work\scheduled_task\write_md5_log.php"`,
