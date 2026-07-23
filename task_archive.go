@@ -67,6 +67,7 @@ type taskArchiveXML struct {
 	} `xml:"RegistrationInfo"`
 }
 
+// taskNameFromXML 从任务 XML 的 RegistrationInfo.URI 提取并规范化完整任务路径。
 func taskNameFromXML(xmlText string) (string, error) {
 	var definition taskArchiveXML
 	if err := xml.Unmarshal([]byte(normalizeTaskXMLText(xmlText)), &definition); err != nil {
@@ -159,6 +160,7 @@ func uniqueArchiveTaskXMLFileName(name string, used map[string]bool) string {
 	return filename
 }
 
+// writeTaskArchive 将任务 XML、清单和 SHA-256 校验写入一个可导入的 ZIP 归档包。
 func writeTaskArchive(outputPath, source string, items []TaskArchiveItem) (err error) {
 	if len(items) == 0 {
 		return errors.New("没有可导出的任务。")
@@ -231,6 +233,7 @@ func writeTaskArchive(outputPath, source string, items []TaskArchiveItem) (err e
 	return nil
 }
 
+// readTaskArchive 验证 ZIP 清单、路径和摘要后读取可恢复的任务 XML 列表。
 func readTaskArchive(inputPath string) ([]TaskArchiveItem, error) {
 	reader, err := zip.OpenReader(inputPath)
 	if err != nil {
@@ -311,6 +314,7 @@ func readTaskArchive(inputPath string) ([]TaskArchiveItem, error) {
 	return items, nil
 }
 
+// readTaskImportFile 根据扩展名读取 ZIP 备份包或单个任务 XML 文件。
 func readTaskImportFile(inputPath string) ([]TaskArchiveItem, error) {
 	if strings.EqualFold(filepath.Ext(inputPath), ".zip") {
 		return readTaskArchive(inputPath)
@@ -337,6 +341,7 @@ func readTaskImportFile(inputPath string) ([]TaskArchiveItem, error) {
 	return []TaskArchiveItem{{Name: name, XML: xmlText}}, nil
 }
 
+// safeArchiveEntryName 检查 ZIP 条目是否位于 tasks 目录且不包含路径穿越片段。
 func safeArchiveEntryName(name string) bool {
 	if name == "" || strings.Contains(name, `\`) || strings.HasPrefix(name, "/") || !strings.HasPrefix(name, "tasks/") {
 		return false
@@ -344,6 +349,7 @@ func safeArchiveEntryName(name string) bool {
 	return path.Clean(name) == name && !strings.Contains(name, "..")
 }
 
+// readArchiveFile 在大小上限内读取 ZIP 条目，避免异常归档消耗过多内存。
 func readArchiveFile(file *zip.File) ([]byte, error) {
 	if file.UncompressedSize64 > maxTaskArchiveXMLBytes {
 		return nil, fmt.Errorf("备份文件过大：%s", file.Name)
@@ -363,6 +369,7 @@ func readArchiveFile(file *zip.File) ([]byte, error) {
 	return data, nil
 }
 
+// collectTaskArchiveItems 逐项导出任务 XML，保留单项失败并继续处理其余任务。
 func collectTaskArchiveItems(tasks []Task, exporter func(string) (string, error)) TaskExportSummary {
 	summary := TaskExportSummary{
 		Items:   make([]TaskArchiveItem, 0, len(tasks)),
@@ -390,6 +397,7 @@ func collectTaskArchiveItems(tasks []Task, exporter func(string) (string, error)
 	return summary
 }
 
+// buildTaskImportPlan 标记导入任务是否已存在，供界面确认覆盖或跳过策略。
 func buildTaskImportPlan(items []TaskArchiveItem, existing map[string]bool) []TaskImportPlanItem {
 	plan := make([]TaskImportPlanItem, 0, len(items))
 	for _, item := range items {
@@ -404,6 +412,7 @@ func buildTaskImportPlan(items []TaskArchiveItem, existing map[string]bool) []Ta
 	return plan
 }
 
+// applyTaskImportPlan 按确认后的计划恢复任务，并返回每一项的最终状态。
 func applyTaskImportPlan(plan []TaskImportPlanItem, restorer func(string, string) error) []TaskTransferResult {
 	results := make([]TaskTransferResult, 0, len(plan))
 	for _, item := range plan {

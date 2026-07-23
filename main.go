@@ -303,6 +303,7 @@ var (
 	wizardSubmitButton win.HWND
 )
 
+// main 初始化权限、Win32 主窗口和消息循环，并启动首次任务读取。
 func main() {
 	lockUIThread()
 	if len(os.Args) > 1 && os.Args[1] == "--save-task" {
@@ -673,6 +674,7 @@ func createControls(hwnd win.HWND) {
 	updateActionButtons(nil)
 }
 
+// layoutControls 根据主窗口当前尺寸重新排列顶部工具栏、任务列表和详情区域。
 func layoutControls(hwnd win.HWND) {
 	var rect win.RECT
 	win.GetClientRect(hwnd, &rect)
@@ -721,6 +723,7 @@ func layoutControls(hwnd win.HWND) {
 	}
 }
 
+// handleCommand 分发控件命令并触发筛选、任务操作或导入导出流程。
 func handleCommand(id, code uint16) {
 	switch id {
 	case idSearch:
@@ -763,6 +766,7 @@ func handleCommand(id, code uint16) {
 	}
 }
 
+// handleNotify 处理列表控件的选择变更和自定义绘制通知。
 func handleNotify(lParam uintptr) uintptr {
 	if lParam == 0 {
 		return 0
@@ -806,6 +810,7 @@ func handleNotify(lParam uintptr) uintptr {
 	return 0
 }
 
+// safeCreateBasicTask 捕获创建或修改任务窗口中的异常，避免异常退出主界面。
 func safeCreateBasicTask() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -816,6 +821,7 @@ func safeCreateBasicTask() {
 	createBasicTask()
 }
 
+// showTaskWizard 显示任务创建或修改窗口，并复用已打开的配置窗口。
 func showTaskWizard() {
 	if wizardWnd != 0 {
 		win.ShowWindow(wizardWnd, win.SW_SHOW)
@@ -855,6 +861,7 @@ func showTaskWizard() {
 	}
 }
 
+// refreshTasks 在当前线程同步读取任务，供非界面调试路径使用。
 func refreshTasks() {
 	tasks, err := queryTasks()
 	if err != nil {
@@ -941,6 +948,7 @@ func defaultTaskSelectionIndex(_ int) int {
 	return -1
 }
 
+// updateTaskDetailFromSelection 根据列表当前选中项刷新右侧任务详情和操作按钮。
 func updateTaskDetailFromSelection() {
 	index := int(win.SendMessage(listView, win.LVM_GETNEXTITEM, ^uintptr(0), win.LVNI_SELECTED))
 	if index >= 0 && index < len(viewTasks) {
@@ -950,6 +958,7 @@ func updateTaskDetailFromSelection() {
 	updateTaskDetail()
 }
 
+// updateTaskDetail 显示指定任务的完整信息；未提供任务时显示引导文本并禁用操作。
 func updateTaskDetail(tasks ...Task) {
 	if detailEdit == 0 {
 		return
@@ -981,6 +990,7 @@ func updateTaskDetail(tasks ...Task) {
 	updateActionButtons(&task)
 }
 
+// detailValue 将空值和 N/A 转换为详情面板使用的占位符。
 func detailValue(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" || strings.EqualFold(value, "N/A") {
@@ -989,6 +999,7 @@ func detailValue(value string) string {
 	return value
 }
 
+// updateActionButtons 按任务状态和当前加载状态更新运行、停止、启用等按钮。
 func updateActionButtons(task *Task) {
 	hasTask := task != nil && !loadingTasks && !operationBusy
 	win.EnableWindow(editButton, hasTask)
@@ -1006,6 +1017,7 @@ func updateActionButtons(task *Task) {
 	win.EnableWindow(disableButton, task.Enabled)
 }
 
+// handleWatchdogTick 记录界面心跳，并在异步加载或操作超时后恢复可交互状态。
 func handleWatchdogTick() {
 	now := time.Now()
 	if lastWatchdogLog.IsZero() || now.Sub(lastWatchdogLog) >= 30*time.Second {
@@ -1035,6 +1047,7 @@ func handleWatchdogTick() {
 	}
 }
 
+// taskScriptPath 从任务命令行提取脚本路径，并结合起始目录解析相对路径。
 func taskScriptPath(task Task) string {
 	parts := splitCommandLine(task.TaskToRun)
 	for i, part := range parts {
@@ -1048,6 +1061,7 @@ func taskScriptPath(task Task) string {
 	return ""
 }
 
+// absoluteTaskPath 将任务中的路径按起始目录转换为可展示的绝对路径。
 func absoluteTaskPath(pathValue, startIn string) string {
 	pathValue = strings.Trim(strings.TrimSpace(pathValue), `"`)
 	startIn = strings.Trim(strings.TrimSpace(startIn), `"`)
@@ -1063,6 +1077,7 @@ func absoluteTaskPath(pathValue, startIn string) string {
 	return pathValue
 }
 
+// splitCommandLine 按引号规则拆分任务命令行参数。
 func splitCommandLine(command string) []string {
 	var parts []string
 	var b strings.Builder
@@ -1118,6 +1133,7 @@ func taskMatches(task Task, field, query string) bool {
 	return strings.Contains(strings.ToLower(strings.Join(values, " ")), query)
 }
 
+// selectedTask 返回列表当前选中的任务；未选中时提示用户并返回 false。
 func selectedTask() (Task, bool) {
 	index := int(win.SendMessage(listView, win.LVM_GETNEXTITEM, ^uintptr(0), win.LVNI_SELECTED))
 	if index < 0 || index >= len(viewTasks) {
@@ -1127,6 +1143,7 @@ func selectedTask() (Task, bool) {
 	return viewTasks[index], true
 }
 
+// editSelectedTask 异步读取选中任务的 XML 配置并打开修改窗口。
 func editSelectedTask() {
 	if wizardWnd != 0 {
 		message(mainWnd, "正在编辑", "请先保存或关闭当前任务窗口。")
@@ -1158,6 +1175,7 @@ func editSelectedTask() {
 	}()
 }
 
+// loadTaskConfig 导出并解析任务 XML，转换为编辑窗口可使用的配置。
 func loadTaskConfig(name string) (TaskCreateConfig, error) {
 	out, err := exportTaskXML(name)
 	if err != nil {
@@ -1166,6 +1184,7 @@ func loadTaskConfig(name string) (TaskCreateConfig, error) {
 	return parseTaskXMLConfig(name, out)
 }
 
+// parseTaskXMLConfig 从任务 XML 提取当前编辑器支持的触发器、动作和权限配置。
 func parseTaskXMLConfig(name, xmlText string) (TaskCreateConfig, error) {
 	xmlText = normalizeTaskXMLText(xmlText)
 	var definition schedulerTaskXML
@@ -1261,6 +1280,7 @@ func parseTaskXMLConfig(name, xmlText string) (TaskCreateConfig, error) {
 	return config, nil
 }
 
+// splitStartBoundary 将 XML 的开始边界拆分为界面使用的日期和时间。
 func splitStartBoundary(value string) (string, string, error) {
 	value = strings.TrimSpace(value)
 	if len(value) < 16 || value[10] != 'T' {
@@ -1273,6 +1293,7 @@ func splitStartBoundary(value string) (string, string, error) {
 	return parsed.Format("2006/01/02"), parsed.Format("15:04"), nil
 }
 
+// xmlWeekDays 将 XML 周日期节点转换为 schtasks 使用的星期缩写列表。
 func xmlWeekDays(days schedulerDaysOfWeek) []string {
 	var result []string
 	for _, item := range []struct {
@@ -1335,6 +1356,7 @@ func taskAction(action string) {
 	}()
 }
 
+// setMainToolbarEnabled 统一启用或禁用主窗口顶部的任务管理按钮。
 func setMainToolbarEnabled(enabled bool) {
 	for _, button := range []win.HWND{refreshButton, createButtonHwnd, importButton, exportButton, backupButton} {
 		if button != 0 {
@@ -1343,6 +1365,7 @@ func setMainToolbarEnabled(enabled bool) {
 	}
 }
 
+// beginArchiveOperation 标记导入导出或备份开始，并切换主界面到忙碌状态。
 func beginArchiveOperation(status string) {
 	operationBusy = true
 	archiveOperation = true
@@ -1352,6 +1375,7 @@ func beginArchiveOperation(status string) {
 	setWindowText(statLabel, status)
 }
 
+// finishArchiveOperation 结束归档操作、展示结果，并按需异步刷新任务列表。
 func finishArchiveOperation(title, text string, refresh bool) {
 	debugLog("finishArchiveOperation start title=%q refresh=%v", title, refresh)
 	operationBusy = false
@@ -1377,6 +1401,7 @@ func archiveCompletionRefresh() bool {
 	return true
 }
 
+// selectedTaskForExport 返回用户显式选中的导出任务；无选中项时返回 nil。
 func selectedTaskForExport() *Task {
 	index := int(win.SendMessage(listView, win.LVM_GETNEXTITEM, ^uintptr(0), win.LVNI_SELECTED))
 	if index < 0 || index >= len(viewTasks) {
@@ -1386,6 +1411,7 @@ func selectedTaskForExport() *Task {
 	return &selected
 }
 
+// tasksForExport 在存在显式选择时导出单项，否则返回当前筛选结果。
 func tasksForExport(selected *Task, filtered []Task) []Task {
 	if selected != nil {
 		return []Task{*selected}
@@ -1393,6 +1419,7 @@ func tasksForExport(selected *Task, filtered []Task) []Task {
 	return append([]Task(nil), filtered...)
 }
 
+// exportSelectedOrFiltered 打开保存对话框，并导出选中任务或当前筛选任务。
 func exportSelectedOrFiltered() {
 	if operationBusy || loadingTasks {
 		return
@@ -1409,6 +1436,7 @@ func exportSelectedOrFiltered() {
 	exportTasksAsync(tasks, path, "正在导出任务，请稍候...")
 }
 
+// backupAllTasks 忽略筛选和选择状态，将本机全部任务导出为 ZIP 备份包。
 func backupAllTasks() {
 	if operationBusy || loadingTasks {
 		return
@@ -1425,6 +1453,7 @@ func backupAllTasks() {
 	exportTasksAsync(tasks, path, "正在备份全部任务，请稍候...")
 }
 
+// exportTasksAsync 在后台收集任务 XML 并写入 ZIP，避免阻塞 Win32 界面线程。
 func exportTasksAsync(tasks []Task, outputPath, status string) {
 	beginArchiveOperation(status)
 	go func() {
@@ -1445,6 +1474,7 @@ func exportTasksAsync(tasks []Task, outputPath, status string) {
 	}()
 }
 
+// chooseAndImportTasks 选择 ZIP 或 XML 文件，并开始导入前的冲突检查。
 func chooseAndImportTasks() {
 	if operationBusy || loadingTasks {
 		return
@@ -1456,6 +1486,7 @@ func chooseAndImportTasks() {
 	startImportPreflight(path)
 }
 
+// startImportPreflight 在后台读取导入文件并生成任务名称冲突处理计划。
 func startImportPreflight(inputPath string) {
 	beginArchiveOperation("正在检查导入文件，请稍候...")
 	knownTasks := make(map[string]bool, len(allTasks))
@@ -1477,6 +1508,7 @@ func startImportPreflight(inputPath string) {
 	}()
 }
 
+// confirmImportPlan 展示导入摘要，并逐项确认存在同名任务时的覆盖或跳过策略。
 func confirmImportPlan(plan []TaskImportPlanItem) bool {
 	if len(plan) == 0 {
 		message(mainWnd, "无法导入", "导入文件中没有任务。")
@@ -1502,6 +1534,7 @@ func confirmImportPlan(plan []TaskImportPlanItem) bool {
 	return true
 }
 
+// startTaskImportAsync 在后台按计划恢复任务 XML，并将结果通知主窗口。
 func startTaskImportAsync(plan []TaskImportPlanItem) {
 	setWindowText(statLabel, "正在导入任务，请稍候...")
 	go func() {
@@ -1510,6 +1543,7 @@ func startTaskImportAsync(plan []TaskImportPlanItem) {
 	}()
 }
 
+// importPlanSummary 汇总导入计划中的新建、覆盖和跳过任务数量。
 func importPlanSummary(plan []TaskImportPlanItem) string {
 	var lines []string
 	conflicts := 0
@@ -1530,6 +1564,7 @@ func importPlanSummary(plan []TaskImportPlanItem) string {
 	return fmt.Sprintf("共检测到 %d 个任务，其中同名冲突 %d 个。\r\n\r\n%s", len(plan), conflicts, strings.Join(lines, "\r\n"))
 }
 
+// archiveResultSummary 生成导入、导出或备份完成提示中的成功、跳过和失败明细。
 func archiveResultSummary(results []TaskTransferResult, outputPath string) string {
 	success, skipped, failed := 0, 0, 0
 	var details []string
@@ -1606,6 +1641,7 @@ func createBasicTask() {
 	}()
 }
 
+// saveTaskConfig 创建或更新任务，并在需要改名时完成新任务创建和旧任务删除。
 func saveTaskConfig(cfg TaskCreateConfig, originalName string, systemAccount bool) error {
 	if err := validateSystemTaskPrivilege(systemAccount, isElevated()); err != nil {
 		return err
@@ -1652,6 +1688,7 @@ func saveTaskConfig(cfg TaskCreateConfig, originalName string, systemAccount boo
 	return nil
 }
 
+// validateSystemTaskPrivilege 检查创建 SYSTEM 账户任务所需的管理员权限。
 func validateSystemTaskPrivilege(systemAccount bool, elevated bool) error {
 	if systemAccount && !elevated {
 		return errors.New("创建 SYSTEM / 最高权限任务需要管理员权限。请以管理员身份重新运行本程序。")
@@ -1659,6 +1696,7 @@ func validateSystemTaskPrivilege(systemAccount bool, elevated bool) error {
 	return nil
 }
 
+// saveTaskConfigIsolated 通过独立进程保存任务，隔离 schtasks 可能造成的界面阻塞。
 func saveTaskConfigIsolated(cfg TaskCreateConfig, originalName string, systemAccount bool) error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -1711,6 +1749,7 @@ func saveTaskConfigIsolated(cfg TaskCreateConfig, originalName string, systemAcc
 	return nil
 }
 
+// runSaveTaskCommand 执行独立保存进程接收的请求文件，并将结果写回结果文件。
 func runSaveTaskCommand(args []string) error {
 	if len(args) < 2 {
 		return errors.New("missing save task command arguments")
@@ -1814,6 +1853,7 @@ func buildCreateArgs(cfg TaskCreateConfig) ([]string, error) {
 	return args, nil
 }
 
+// normalizeTaskName 统一任务路径格式，并拒绝空路径、尾部反斜杠和非法字符。
 func normalizeTaskName(value string) (string, error) {
 	value = strings.TrimSpace(strings.ReplaceAll(value, "/", `\`))
 	if value == "" {
@@ -1833,11 +1873,13 @@ func normalizeTaskName(value string) (string, error) {
 	return value, nil
 }
 
+// taskExists 查询指定任务是否存在于本机任务计划程序。
 func taskExists(name string) bool {
 	_, err := runSchtasks("/query", "/tn", name)
 	return err == nil
 }
 
+// exportTaskXML 优先通过 schtasks 导出任务 XML，失败时使用 Task Scheduler COM 兜底。
 func exportTaskXML(name string) (string, error) {
 	out, err := runSchtasks("/query", "/tn", name, "/xml")
 	if err == nil {
@@ -1855,6 +1897,7 @@ func exportTaskXML(name string) (string, error) {
 	return "", fmt.Errorf("schtasks失败：%s；COM兜底失败：%v", schtasksErr, fallbackErr)
 }
 
+// exportTaskXMLViaPowerShell 通过 PowerShell COM 接口读取指定任务的原始 XML。
 func exportTaskXMLViaPowerShell(name string) (string, error) {
 	shortName, folderName := splitTaskPath(name)
 	encode := func(value string) string {
@@ -1883,6 +1926,7 @@ $xml = [string]$task.Xml
 	return decodePowerShellBase64Output(out)
 }
 
+// decodePowerShellBase64Output 从 PowerShell 输出中提取并解码 UTF-8 Base64 文本。
 func decodePowerShellBase64Output(out string) (string, error) {
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
@@ -1897,6 +1941,7 @@ func decodePowerShellBase64Output(out string) (string, error) {
 	return "", errors.New("PowerShell COM 未返回任务 XML")
 }
 
+// normalizeTaskXMLText 去除命令输出前缀并将 XML 声明统一为内部 UTF-8 文本。
 func normalizeTaskXMLText(value string) string {
 	value = strings.TrimPrefix(value, "\ufeff")
 	if start := strings.Index(value, "<?xml"); start >= 0 {
@@ -1928,6 +1973,7 @@ func encodeTaskXMLForSchtasks(definition string) []byte {
 	return data
 }
 
+// restoreTaskXML 将归档任务定义写入临时 UTF-16 XML，并通过 schtasks 覆盖恢复指定任务。
 func restoreTaskXML(name, definition string) error {
 	file, err := os.CreateTemp("", "task-scheduler-restore-*.xml")
 	if err != nil {
@@ -1949,6 +1995,7 @@ func restoreTaskXML(name, definition string) error {
 	return nil
 }
 
+// updateTaskMetadata 通过 Task Scheduler COM 更新任务描述和程序起始目录。
 func updateTaskMetadata(name, description, startIn string) error {
 	shortName, folderName := splitTaskPath(name)
 	encode := func(value string) string {
@@ -2027,6 +2074,7 @@ func queryTasks() ([]Task, error) {
 	return nil, errors.New(lastErr)
 }
 
+// sortTasks 按任务完整路径进行不区分大小写的稳定展示排序。
 func sortTasks(tasks []Task) {
 	sort.Slice(tasks, func(i, j int) bool {
 		return strings.ToLower(tasks[i].Name) < strings.ToLower(tasks[j].Name)
@@ -2066,6 +2114,7 @@ func mergeTasksByName(tasks []Task) []Task {
 	return merged
 }
 
+// mergeTextValues 合并逗号分隔字段并避免重复值。
 func mergeTextValues(left, right string) string {
 	left = strings.TrimSpace(left)
 	right = strings.TrimSpace(right)
@@ -2209,6 +2258,7 @@ Walk $service.GetFolder('\')
 	return tasks, nil
 }
 
+// parsePowerShellTaskOutput 解析 PowerShell COM 兜底查询输出中的 Base64 字段。
 func parsePowerShellTaskOutput(out string) []Task {
 	var tasks []Task
 	lines := strings.Split(strings.ReplaceAll(out, "\r\n", "\n"), "\n")
@@ -2258,6 +2308,7 @@ func parsePowerShellTaskOutput(out string) []Task {
 	return tasks
 }
 
+// decodeBase64Field 解码 PowerShell 查询输出中单个 UTF-8 Base64 字段。
 func decodeBase64Field(value string) (string, error) {
 	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(value))
 	if err != nil {
@@ -2266,6 +2317,7 @@ func decodeBase64Field(value string) (string, error) {
 	return string(data), nil
 }
 
+// normalizeTaskRunTime 将无效、未运行或 COM 默认时间标准化为 N/A。
 func normalizeTaskRunTime(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" || strings.EqualFold(value, "N/A") || value == "从不" || value == "从未" {
@@ -2340,6 +2392,7 @@ func parseTaskCSVOutput(out string) []Task {
 	return tasks
 }
 
+// csvCell 按候选中英文列名安全读取 schtasks CSV 记录字段。
 func csvCell(row []string, header map[string]int, keys ...string) string {
 	for _, key := range keys {
 		if i, ok := header[normalizeHeader(key)]; ok && i >= 0 && i < len(row) {
@@ -2412,6 +2465,7 @@ func firstField(fields map[string]string, keys ...string) string {
 	return ""
 }
 
+// isDisabledStatus 判断 schtasks 的中英文状态文本是否表示任务已禁用。
 func isDisabledStatus(status string) bool {
 	status = strings.TrimSpace(status)
 	return strings.EqualFold(status, "Disabled") || status == "已禁用" || status == "禁用"
@@ -2435,6 +2489,7 @@ func splitTaskPath(name string) (shortName string, location string) {
 	return shortName, location
 }
 
+// actionArgs 将界面任务操作转换为对应的 schtasks 参数。
 func actionArgs(action, name string) ([]string, error) {
 	switch action {
 	case "run":
@@ -2459,16 +2514,19 @@ func runSchtasks(args ...string) (string, error) {
 	return runCommandWithTimeout(cmd, externalCommandTimeout)
 }
 
+// runPowerShell 使用默认外部命令超时执行隐藏的 PowerShell 脚本。
 func runPowerShell(script string) (string, error) {
 	return runPowerShellWithTimeout(script, externalCommandTimeout)
 }
 
+// runPowerShellWithTimeout 执行 UTF-16 Base64 编码的 PowerShell 脚本并应用指定超时。
 func runPowerShellWithTimeout(script string, timeout time.Duration) (string, error) {
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", utf16LEBase64(script))
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	return runCommandWithTimeout(cmd, timeout)
 }
 
+// runCommandWithTimeout 执行外部命令、收集输出，并在超时后终止其进程树。
 func runCommandWithTimeout(cmd *exec.Cmd, timeout time.Duration) (string, error) {
 	if timeout <= 0 {
 		out, err := cmd.CombinedOutput()
@@ -2503,12 +2561,14 @@ func runCommandWithTimeout(cmd *exec.Cmd, timeout time.Duration) (string, error)
 	}
 }
 
+// killProcessTree 使用 taskkill 强制终止指定进程及其全部子进程。
 func killProcessTree(pid int) {
 	cmd := exec.Command("taskkill.exe", "/PID", strconv.Itoa(pid), "/T", "/F")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	_ = cmd.Run()
 }
 
+// utf16LEBase64 将字符串编码为 PowerShell -EncodedCommand 所需的 UTF-16LE Base64。
 func utf16LEBase64(s string) string {
 	chars := syscall.StringToUTF16(s)
 	if len(chars) > 0 && chars[len(chars)-1] == 0 {
@@ -2568,6 +2628,7 @@ func decodeANSI(data []byte) string {
 	return syscall.UTF16ToString(wide)
 }
 
+// decodeUTF16Bytes 将带指定字节序的 UTF-16 字节数组解码为 Go 字符串。
 func decodeUTF16Bytes(data []byte, bigEndian bool) string {
 	values := make([]uint16, 0, len(data)/2)
 	for index := 0; index+1 < len(data); index += 2 {
@@ -2704,6 +2765,7 @@ func selfTestScheduler() error {
 	return nil
 }
 
+// validateSystemPrincipalXML 验证任务 XML 是否使用 SYSTEM 账户和最高运行级别。
 func validateSystemPrincipalXML(xmlText string) error {
 	xmlText = normalizeTaskXMLText(xmlText)
 	var definition schedulerTaskXML
@@ -2725,6 +2787,7 @@ func validateSystemPrincipalXML(xmlText string) error {
 	return nil
 }
 
+// removeSystemRunOptions 移除 schtasks 参数中的 SYSTEM 账户和最高权限运行选项。
 func removeSystemRunOptions(args []string) []string {
 	result := make([]string, 0, len(args))
 	for index := 0; index < len(args); index++ {
@@ -2737,6 +2800,7 @@ func removeSystemRunOptions(args []string) []string {
 	return result
 }
 
+// initCommonControls 初始化 Win32 ListView 等公共控件库。
 func initCommonControls() {
 	icc := win.INITCOMMONCONTROLSEX{
 		DwSize: uint32(unsafe.Sizeof(win.INITCOMMONCONTROLSEX{})),
@@ -2745,6 +2809,7 @@ func initCommonControls() {
 	win.InitCommonControlsEx(&icc)
 }
 
+// initFonts 创建主界面标题、分区和普通文本所需的字体资源。
 func initFonts() {
 	// Server 2008 R2 通常没有 Microsoft YaHei UI，优先使用该系统自带的 Microsoft YaHei。
 	uiFont = createFont("Microsoft YaHei", 9, 400)
@@ -2761,6 +2826,7 @@ func initFonts() {
 	}
 }
 
+// initBrushes 创建主窗口、内容区和自绘按钮使用的画刷资源。
 func initBrushes() {
 	pageBrush = makeBrush(rgb(244, 246, 248), win.COLOR_BTNFACE)
 	contentBrush = makeBrush(rgb(255, 255, 255), win.COLOR_WINDOW)
@@ -2771,6 +2837,7 @@ func initBrushes() {
 	primaryPressedBrush = makeBrush(rgb(29, 78, 216), win.COLOR_HIGHLIGHT)
 }
 
+// makeBrush 创建指定颜色的画刷，失败时返回系统预定义画刷作为兜底。
 func makeBrush(color win.COLORREF, fallback int) win.HBRUSH {
 	brush := win.CreateBrushIndirect(&win.LOGBRUSH{LbStyle: win.BS_SOLID, LbColor: color})
 	if brush != 0 {
@@ -2780,6 +2847,7 @@ func makeBrush(color win.COLORREF, fallback int) win.HBRUSH {
 	return win.GetSysColorBrush(fallback)
 }
 
+// controlColor 为静态文本和编辑控件提供统一的前景色、背景色和画刷。
 func controlColor(wParam, lParam uintptr, staticControl bool) uintptr {
 	hdc := win.HDC(wParam)
 	hwnd := win.HWND(lParam)
@@ -2804,6 +2872,7 @@ func controlColor(wParam, lParam uintptr, staticControl bool) uintptr {
 	return uintptr(brush)
 }
 
+// createFont 按字体名称、点大小和字重创建 Win32 字体句柄。
 func createFont(face string, pointSize int32, weight int32) win.HFONT {
 	var lf win.LOGFONT
 	lf.LfHeight = -pointSize * 96 / 72
@@ -2816,24 +2885,29 @@ func createFont(face string, pointSize int32, weight int32) win.HFONT {
 	return win.CreateFontIndirect(&lf)
 }
 
+// createWindow 创建不带扩展样式的 Win32 子窗口控件。
 func createWindow(className interface{}, text string, style uint32, x, y, w, h int32, parent win.HWND, id uint16) win.HWND {
 	return createWindowEx(0, className, text, style, x, y, w, h, parent, id)
 }
 
+// createWindowEx 创建带扩展样式的 Win32 子窗口控件。
 func createWindowEx(exStyle uint32, className interface{}, text string, style uint32, x, y, w, h int32, parent win.HWND, id uint16) win.HWND {
 	hwnd := win.CreateWindowEx(exStyle, classPtr(className), utf16(text), style, x, y, w, h, parent, win.HMENU(uintptr(id)), hInst, nil)
 	setControlFont(hwnd, uiFont)
 	return hwnd
 }
 
+// createLabel 创建主界面使用的静态文本控件。
 func createLabel(parent win.HWND, text string, x, y, w, h int32) win.HWND {
 	return createWindow("STATIC", text, win.WS_CHILD|win.WS_VISIBLE, x, y, w, h, parent, 0)
 }
 
+// createButton 创建支持自绘的主界面按钮控件。
 func createButton(parent win.HWND, text string, x, y, w, h int32, id uint16) win.HWND {
 	return createWindow("BUTTON", text, win.WS_CHILD|win.WS_VISIBLE|win.BS_OWNERDRAW|win.WS_TABSTOP, x, y, w, h, parent, id)
 }
 
+// drawOwnerButton 按按钮状态绘制应用统一的边框、背景和文字。
 func drawOwnerButton(lParam uintptr) bool {
 	if lParam == 0 {
 		return false
@@ -2906,6 +2980,7 @@ func drawOwnerButton(lParam uintptr) bool {
 	return true
 }
 
+// fillRectangle 使用指定画刷填充 Win32 矩形区域。
 func fillRectangle(hdc win.HDC, rect win.RECT, brush win.HBRUSH) {
 	oldBrush := win.SelectObject(hdc, win.HGDIOBJ(brush))
 	oldPen := win.SelectObject(hdc, win.GetStockObject(win.NULL_PEN))
@@ -2914,12 +2989,14 @@ func fillRectangle(hdc win.HDC, rect win.RECT, brush win.HBRUSH) {
 	win.SelectObject(hdc, oldBrush)
 }
 
+// setControlFont 为控件设置字体并请求立即重绘。
 func setControlFont(hwnd win.HWND, font win.HFONT) {
 	if hwnd != 0 && font != 0 {
 		win.SendMessage(hwnd, win.WM_SETFONT, uintptr(font), 1)
 	}
 }
 
+// addColumn 向任务 ListView 添加指定位置、标题和宽度的列。
 func addColumn(index int, title string, width int32) {
 	var col win.LVCOLUMN
 	col.Mask = win.LVCF_TEXT | win.LVCF_WIDTH | win.LVCF_SUBITEM
@@ -2929,6 +3006,7 @@ func addColumn(index int, title string, width int32) {
 	win.SendMessage(listView, win.LVM_INSERTCOLUMN, uintptr(index), uintptr(unsafe.Pointer(&col)))
 }
 
+// insertItem 将一行任务字段写入 ListView 的各列。
 func insertItem(index int, values []string) {
 	var item win.LVITEM
 	item.Mask = win.LVIF_TEXT
@@ -2943,10 +3021,12 @@ func insertItem(index int, values []string) {
 	}
 }
 
+// comboAdd 向下拉框添加一个文本选项。
 func comboAdd(hwnd win.HWND, text string) {
 	win.SendMessage(hwnd, win.CB_ADDSTRING, 0, uintptr(unsafe.Pointer(utf16(text))))
 }
 
+// comboText 返回下拉框当前选中项的文本。
 func comboText(hwnd win.HWND) string {
 	index := win.SendMessage(hwnd, win.CB_GETCURSEL, 0, 0)
 	if int32(index) < 0 {
@@ -2961,6 +3041,7 @@ func comboText(hwnd win.HWND) string {
 	return syscall.UTF16ToString(buf)
 }
 
+// windowText 读取 Win32 控件当前的 Unicode 文本。
 func windowText(hwnd win.HWND) string {
 	n := int(win.SendMessage(hwnd, win.WM_GETTEXTLENGTH, 0, 0))
 	buf := make([]uint16, n+1)
@@ -2968,14 +3049,17 @@ func windowText(hwnd win.HWND) string {
 	return syscall.UTF16ToString(buf)
 }
 
+// setWindowText 设置 Win32 控件文本。
 func setWindowText(hwnd win.HWND, text string) {
 	win.SendMessage(hwnd, win.WM_SETTEXT, 0, uintptr(unsafe.Pointer(utf16(text))))
 }
 
+// message 显示带信息图标的模态 Win32 提示框。
 func message(parent win.HWND, title, text string) {
 	win.MessageBox(parent, utf16(text), utf16(title), win.MB_OK|win.MB_ICONINFORMATION)
 }
 
+// classPtr 将窗口类名或已存在的 UTF-16 指针转换为 CreateWindow 可用的指针。
 func classPtr(value interface{}) *uint16 {
 	switch v := value.(type) {
 	case string:
@@ -2987,14 +3071,17 @@ func classPtr(value interface{}) *uint16 {
 	}
 }
 
+// utf16 将 Go 字符串转换为 Win32 API 使用的以零结尾 UTF-16 指针。
 func utf16(s string) *uint16 {
 	return syscall.StringToUTF16Ptr(s)
 }
 
+// rgb 将红绿蓝分量转换为 Win32 COLORREF 值。
 func rgb(r, g, b byte) win.COLORREF {
 	return win.COLORREF(uint32(r) | uint32(g)<<8 | uint32(b)<<16)
 }
 
+// isElevated 判断当前进程是否具备管理员权限。
 func isElevated() bool {
 	ret, _, _ := syscall.NewLazyDLL("shell32.dll").NewProc("IsUserAnAdmin").Call()
 	return ret != 0
@@ -3156,6 +3243,7 @@ func createWizardControls(hwnd win.HWND) {
 	}
 }
 
+// populateWizard 将任务配置填充到创建或修改窗口的各控件。
 func populateWizard(config TaskCreateConfig) {
 	name := strings.TrimSpace(config.Name)
 	if strings.HasPrefix(name, `\`) && strings.Count(name, `\`) == 1 {
@@ -3203,6 +3291,7 @@ func populateWizard(config TaskCreateConfig) {
 	updateWizardScheduleOptions()
 }
 
+// scheduleCode 将界面中的中英文计划类型转换为 schtasks 使用的计划代码。
 func scheduleCode(text string) string {
 	switch strings.TrimSpace(strings.ToUpper(text)) {
 	case "每天", "每日", "DAILY":
@@ -3243,12 +3332,14 @@ func updateWizardScheduleOptions() {
 	updateRepeatControls()
 }
 
+// updateRepeatControls 根据重复执行复选框状态启用或禁用相关下拉框。
 func updateRepeatControls() {
 	enabled := win.SendMessage(wizardRepeatCheck, win.BM_GETCHECK, 0, 0) == win.BST_CHECKED && win.IsWindowEnabled(wizardRepeatCheck)
 	win.EnableWindow(wizardRepeatInt, enabled)
 	win.EnableWindow(wizardRepeatDur, enabled)
 }
 
+// showControl 显示或隐藏指定 Win32 控件。
 func showControl(hwnd win.HWND, show bool) {
 	if hwnd == 0 {
 		return
@@ -3285,10 +3376,12 @@ func selectedMonthDay() string {
 	return "1"
 }
 
+// selectedRepeatIntervalMinutes 返回重复间隔下拉框对应的分钟数。
 func selectedRepeatIntervalMinutes() int {
 	return repeatMinutesFromText(comboText(wizardRepeatInt))
 }
 
+// selectedRepeatDurationMinutes 返回重复持续时间下拉框对应的分钟数。
 func selectedRepeatDurationMinutes() int {
 	minutes := repeatMinutesFromText(comboText(wizardRepeatDur))
 	if minutes <= 0 {
@@ -3297,6 +3390,7 @@ func selectedRepeatDurationMinutes() int {
 	return minutes
 }
 
+// repeatMinutesFromText 将“分钟、小时、天”文本选项转换为分钟数。
 func repeatMinutesFromText(text string) int {
 	text = strings.TrimSpace(text)
 	fields := strings.Fields(text)
@@ -3316,6 +3410,7 @@ func repeatMinutesFromText(text string) int {
 	return value
 }
 
+// setRepeatComboByMinutes 在重复设置下拉框中选中与分钟数匹配的选项。
 func setRepeatComboByMinutes(hwnd win.HWND, options []int, minutes int) {
 	if hwnd == 0 || minutes <= 0 {
 		return
@@ -3343,6 +3438,7 @@ func normalizeTaskDate(value string) (string, error) {
 	return "", errors.New("开始日期无效，请使用 yyyy/MM/dd 格式，例如 2026/07/06。")
 }
 
+// normalizeTaskTime 验证并规范化界面输入时间为 HH:mm 格式。
 func normalizeTaskTime(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -3355,6 +3451,7 @@ func normalizeTaskTime(value string) (string, error) {
 	return parsed.Format("15:04"), nil
 }
 
+// normalizeWeekDays 验证、去重并排序每周触发器使用的星期缩写。
 func normalizeWeekDays(values []string) ([]string, error) {
 	valid := map[string]bool{"SUN": true, "MON": true, "TUE": true, "WED": true, "THU": true, "FRI": true, "SAT": true}
 	seen := make(map[string]bool, len(values))
@@ -3375,6 +3472,7 @@ func normalizeWeekDays(values []string) ([]string, error) {
 	return result, nil
 }
 
+// normalizeMonthDay 验证每月日期输入，并支持 LASTDAY 最后一天语义。
 func normalizeMonthDay(value string) (string, error) {
 	value = strings.ToUpper(strings.TrimSpace(value))
 	if value == "" {
@@ -3400,6 +3498,7 @@ func normalizeMonthDay(value string) (string, error) {
 	return strconv.Itoa(day), nil
 }
 
+// normalizeRepeatSettings 校验重复间隔和持续时间是否适用于指定计划类型。
 func normalizeRepeatSettings(schedule string, intervalMinutes, durationMinutes int) (int, int, error) {
 	if intervalMinutes <= 0 {
 		return 0, 0, nil
@@ -3419,6 +3518,7 @@ func normalizeRepeatSettings(schedule string, intervalMinutes, durationMinutes i
 	return intervalMinutes, durationMinutes, nil
 }
 
+// formatDurationForSchtasks 将分钟数格式化为 schtasks /du 使用的 HH:mm 字符串。
 func formatDurationForSchtasks(minutes int) string {
 	if minutes <= 0 {
 		minutes = 1440
@@ -3426,6 +3526,7 @@ func formatDurationForSchtasks(minutes int) string {
 	return fmt.Sprintf("%02d:%02d", minutes/60, minutes%60)
 }
 
+// parseXMLRepetition 将任务 XML 的 ISO 重复间隔和持续时间解析为分钟数。
 func parseXMLRepetition(repetition *schedulerXMLRepetition) (int, int, error) {
 	if repetition == nil {
 		return 0, 0, nil
@@ -3444,6 +3545,7 @@ func parseXMLRepetition(repetition *schedulerXMLRepetition) (int, int, error) {
 	return interval, duration, nil
 }
 
+// parseISODurationMinutes 解析任务计划 XML 使用的 ISO 8601 持续时间为分钟数。
 func parseISODurationMinutes(value string) (int, error) {
 	value = strings.TrimSpace(strings.ToUpper(value))
 	if value == "" {
@@ -3496,6 +3598,7 @@ func parseISODurationMinutes(value string) (int, error) {
 	return minutes, nil
 }
 
+// browseProgram 打开程序或脚本文件选择框，并将选择结果写入任务窗口。
 func browseProgram(parent win.HWND) {
 	path := openFileDialog(parent)
 	if path == "" {
@@ -3504,6 +3607,7 @@ func browseProgram(parent win.HWND) {
 	setWindowText(wizardProgram, path)
 }
 
+// browseStartDir 打开起始目录选择框，并将选择结果写入任务窗口。
 func browseStartDir(parent win.HWND) {
 	dir := openFolderDialog(parent)
 	if dir != "" {
@@ -3526,6 +3630,7 @@ func openFileDialog(parent win.HWND) string {
 	return runExternalPicker(parent, script, "选择程序或脚本失败")
 }
 
+// openTaskImportDialog 打开仅允许 ZIP 或 XML 的任务导入文件选择框。
 func openTaskImportDialog() string {
 	script := strings.Join([]string{
 		"Add-Type -AssemblyName System.Windows.Forms",
@@ -3540,6 +3645,7 @@ func openTaskImportDialog() string {
 	return runExternalPicker(mainWnd, script, "选择导入文件失败")
 }
 
+// saveTaskArchiveDialog 打开任务 ZIP 导出或备份的保存位置选择框。
 func saveTaskArchiveDialog(title, defaultName string) string {
 	script := strings.Join([]string{
 		"Add-Type -AssemblyName System.Windows.Forms",
@@ -3556,6 +3662,7 @@ func saveTaskArchiveDialog(title, defaultName string) string {
 	return runExternalPicker(mainWnd, script, "选择保存位置失败")
 }
 
+// openFolderDialog 打开目录选择框并返回用户选择的本地目录。
 func openFolderDialog(parent win.HWND) string {
 	script := strings.Join([]string{
 		"Add-Type -AssemblyName System.Windows.Forms",
@@ -3568,6 +3675,7 @@ func openFolderDialog(parent win.HWND) string {
 	return runExternalPicker(parent, script, "选择起始目录失败")
 }
 
+// runExternalPicker 在独立 STA PowerShell 进程中显示文件或目录选择窗口，并读取选择结果。
 func runExternalPicker(parent win.HWND, script string, title string) string {
 	debugLog("runExternalPicker start: %s", title)
 	tempPath := filepath.Join(os.TempDir(), fmt.Sprintf("task-scheduler-picker-%d.txt", time.Now().UnixNano()))
@@ -3591,6 +3699,7 @@ func runExternalPicker(parent win.HWND, script string, title string) string {
 	return result
 }
 
+// debugLog 将带时间戳的诊断信息追加到当前工作目录的 debug.log。
 func debugLog(format string, args ...interface{}) {
 	line := time.Now().Format("2006-01-02 15:04:05.000 ") + fmt.Sprintf(format, args...) + "\r\n"
 	f, err := os.OpenFile("debug.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
@@ -3601,6 +3710,7 @@ func debugLog(format string, args ...interface{}) {
 	_, _ = f.WriteString(line)
 }
 
+// head 返回字符串前 n 个字节，用于限制日志中长输出的长度。
 func head(s string, n int) string {
 	if len(s) <= n {
 		return s
@@ -3608,6 +3718,7 @@ func head(s string, n int) string {
 	return s[:n]
 }
 
+// quoteIfNeeded 为包含空白字符的路径添加命令行引号。
 func quoteIfNeeded(path string) string {
 	path = strings.TrimSpace(path)
 	if strings.HasPrefix(path, `"`) && strings.HasSuffix(path, `"`) {
