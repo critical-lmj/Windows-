@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -75,6 +76,57 @@ func taskNameFromXML(xmlText string) (string, error) {
 		return "", errors.New("任务 XML 缺少 RegistrationInfo.URI，无法确定任务名称。")
 	}
 	return normalizeTaskName(definition.RegistrationInfo.URI)
+}
+
+var (
+	registrationInfoEmptyTag = regexp.MustCompile(`(?is)<RegistrationInfo\s*/\s*>`)
+	registrationInfoStartTag = regexp.MustCompile(`(?is)<RegistrationInfo(?:\s[^>]*)?>`)
+	registrationInfoEndTag   = regexp.MustCompile(`(?is)</RegistrationInfo\s*>`)
+	taskStartTag             = regexp.MustCompile(`(?is)<Task(?:\s[^>]*)?>`)
+)
+
+// prepareTaskArchiveXML 以任务列表中的完整路径为准，补齐部分 Windows 系统任务省略的 URI。
+// schtasks /query 能提供任务路径，但某些内置任务 XML 的 RegistrationInfo.URI 是可选且缺失的。
+func prepareTaskArchiveXML(expectedName, xmlText string) (string, error) {
+	name, err := normalizeTaskName(expectedName)
+	if err != nil {
+		return "", err
+	}
+	xmlText = normalizeTaskXMLText(xmlText)
+	var definition taskArchiveXML
+	if err := xml.Unmarshal([]byte(xmlText), &definition); err != nil {
+		return "", fmt.Errorf("任务 XML 格式无效：%w", err)
+	}
+	if uri := strings.TrimSpace(definition.RegistrationInfo.URI); uri != "" {
+		xmlName, normalizeErr := normalizeTaskName(uri)
+		if normalizeErr != nil {
+			return "", normalizeErr
+		}
+		if xmlName != name {
+			return "", fmt.Errorf("任务 XML 名称与任务名称不一致：%s", name)
+		}
+		return xmlText, nil
+	}
+
+	var escaped strings.Builder
+	if err := xml.EscapeText(&escaped, []byte(name)); err != nil {
+		return "", err
+	}
+	uriElement := "<URI>" + escaped.String() + "</URI>"
+	if location := registrationInfoEmptyTag.FindStringIndex(xmlText); location != nil {
+		return xmlText[:location[0]] + "<RegistrationInfo>" + uriElement + "</RegistrationInfo>" + xmlText[location[1]:], nil
+	}
+	if location := registrationInfoStartTag.FindStringIndex(xmlText); location != nil {
+		if closing := registrationInfoEndTag.FindStringIndex(xmlText[location[1]:]); closing != nil {
+			index := location[1] + closing[0]
+			return xmlText[:index] + uriElement + xmlText[index:], nil
+		}
+		return "", errors.New("任务 XML 的 RegistrationInfo 节点不完整，无法补齐任务名称。")
+	}
+	if location := taskStartTag.FindStringIndex(xmlText); location != nil {
+		return xmlText[:location[1]] + "<RegistrationInfo>" + uriElement + "</RegistrationInfo>" + xmlText[location[1]:], nil
+	}
+	return "", errors.New("任务 XML 缺少 Task 根节点，无法补齐任务名称。")
 }
 
 // archiveTaskXMLFileName 将任务路径转换为 ZIP 内可读、可在 Windows 解压的扁平 XML 文件名。
@@ -151,13 +203,9 @@ func writeTaskArchive(outputPath, source string, items []TaskArchiveItem) (err e
 			return fmt.Errorf("备份中存在重复任务名称：%s", name)
 		}
 		names[name] = true
-		xmlText := normalizeTaskXMLText(item.XML)
-		xmlName, xmlErr := taskNameFromXML(xmlText)
+		xmlText, xmlErr := prepareTaskArchiveXML(name, item.XML)
 		if xmlErr != nil {
 			return xmlErr
-		}
-		if xmlName != name {
-			return fmt.Errorf("任务 XML 名称与任务名称不一致：%s", name)
 		}
 		filename := "tasks/" + uniqueArchiveTaskXMLFileName(name, usedFiles)
 		entry, createErr := writer.Create(filename)
@@ -254,13 +302,9 @@ func readTaskArchive(inputPath string) ([]TaskArchiveItem, error) {
 		if !strings.EqualFold(record.SHA256, hex.EncodeToString(digest[:])) {
 			return nil, fmt.Errorf("任务 XML 校验失败：%s", name)
 		}
-		xmlText := normalizeTaskXMLText(string(xmlBytes))
-		xmlName, xmlErr := taskNameFromXML(xmlText)
+		xmlText, xmlErr := prepareTaskArchiveXML(name, string(xmlBytes))
 		if xmlErr != nil {
 			return nil, xmlErr
-		}
-		if xmlName != name {
-			return nil, fmt.Errorf("任务 XML 名称与清单不一致：%s", name)
 		}
 		items = append(items, TaskArchiveItem{Name: name, XML: xmlText})
 	}
@@ -335,14 +379,9 @@ func collectTaskArchiveItems(tasks []Task, exporter func(string) (string, error)
 			summary.Results = append(summary.Results, TaskTransferResult{Name: name, Err: exportErr})
 			continue
 		}
-		xmlText = normalizeTaskXMLText(xmlText)
-		xmlName, xmlErr := taskNameFromXML(xmlText)
+		xmlText, xmlErr := prepareTaskArchiveXML(name, xmlText)
 		if xmlErr != nil {
 			summary.Results = append(summary.Results, TaskTransferResult{Name: name, Err: xmlErr})
-			continue
-		}
-		if xmlName != name {
-			summary.Results = append(summary.Results, TaskTransferResult{Name: name, Err: errors.New("导出的 XML 任务名称不一致")})
 			continue
 		}
 		summary.Items = append(summary.Items, TaskArchiveItem{Name: name, XML: xmlText})

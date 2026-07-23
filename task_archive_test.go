@@ -9,11 +9,16 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func taskXMLWithURI(name string) string {
 	return `<?xml version="1.0" encoding="UTF-8"?><Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><RegistrationInfo><URI>` + name + `</URI></RegistrationInfo><Actions><Exec><Command>cmd.exe</Command></Exec></Actions></Task>`
+}
+
+func taskXMLWithoutURI() string {
+	return `<?xml version="1.0" encoding="UTF-8"?><Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><RegistrationInfo><Description>system task</Description></RegistrationInfo><Actions><Exec><Command>cmd.exe</Command></Exec></Actions></Task>`
 }
 
 func TestTaskArchiveRoundTripKeepsTaskNameAndXML(t *testing.T) {
@@ -35,12 +40,59 @@ func TestTaskArchiveRoundTripKeepsTaskNameAndXML(t *testing.T) {
 	}
 }
 
+func TestTaskArchiveRoundTripKeepsSystemTaskWithoutOriginalURI(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "system-tasks.zip")
+	items := []TaskArchiveItem{{Name: `\System\WithoutURI`, XML: taskXMLWithoutURI()}}
+	if err := writeTaskArchive(path, "SERVER-A", items); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readTaskArchive(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != `\System\WithoutURI` {
+		t.Fatalf("round trip result = %#v", got)
+	}
+	if name, err := taskNameFromXML(got[0].XML); err != nil || name != `\System\WithoutURI` {
+		t.Fatalf("restored URI = %q, err=%v", name, err)
+	}
+}
+
 func TestArchiveTaskXMLFileNameFlattensTaskPath(t *testing.T) {
 	if got := archiveTaskXMLFileName(`\DouyinUser\DouyinGuard\LaunchDouyinGuard`); got != "DouyinUser_DouyinGuard_LaunchDouyinGuard.xml" {
 		t.Fatalf("archiveTaskXMLFileName() = %q", got)
 	}
 	if got := archiveTaskXMLFileName(`\A:B*?`); got != "A_B__.xml" {
 		t.Fatalf("archiveTaskXMLFileName() sanitization = %q", got)
+	}
+}
+
+func TestPrepareTaskArchiveXMLAddsMissingURIFromKnownTaskName(t *testing.T) {
+	prepared, err := prepareTaskArchiveXML(`\System\WithoutURI`, taskXMLWithoutURI())
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, err := taskNameFromXML(prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != `\System\WithoutURI` {
+		t.Fatalf("URI name = %q", name)
+	}
+	if !strings.Contains(prepared, `<Description>system task</Description><URI>\System\WithoutURI</URI>`) {
+		t.Fatalf("URI was not appended after existing RegistrationInfo fields: %q", prepared)
+	}
+}
+
+func TestCollectTaskArchiveItemsKeepsSystemTaskWithoutURI(t *testing.T) {
+	summary := collectTaskArchiveItems([]Task{{Name: `\System\WithoutURI`}}, func(string) (string, error) {
+		return taskXMLWithoutURI(), nil
+	})
+	if len(summary.Items) != 1 || len(summary.Results) != 1 || summary.Results[0].Err != nil {
+		t.Fatalf("system task was skipped: %#v", summary)
+	}
+	if name, err := taskNameFromXML(summary.Items[0].XML); err != nil || name != `\System\WithoutURI` {
+		t.Fatalf("collected XML URI = %q, err=%v", name, err)
 	}
 }
 
