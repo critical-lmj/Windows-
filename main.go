@@ -1614,6 +1614,14 @@ func createBasicTask() {
 	cfg.Arguments = strings.TrimSpace(windowText(wizardArgs))
 	cfg.StartIn = strings.TrimSpace(windowText(wizardStartIn))
 	originalName := strings.TrimSpace(wizardOriginalName)
+	if err := validateTaskNameAvailability(cfg.Name, originalName, allTasks); err != nil {
+		debugLog("createBasicTask name validation failed: %v", err)
+		message(wizardWnd, "任务名不可用", err.Error())
+		if wizardName != 0 {
+			win.SetFocus(wizardName)
+		}
+		return
+	}
 	isEdit := originalName != ""
 	wizardSaving = true
 	operationBusy = true
@@ -1871,6 +1879,31 @@ func normalizeTaskName(value string) (string, error) {
 		}
 	}
 	return value, nil
+}
+
+// validateTaskNameAvailability 检查任务名称格式，并确认候选名称未被其他已加载任务占用。
+func validateTaskNameAvailability(candidate, originalName string, tasks []Task) error {
+	candidate, err := normalizeTaskName(candidate)
+	if err != nil {
+		return err
+	}
+	originalName = strings.TrimSpace(originalName)
+	if originalName != "" {
+		originalName, err = normalizeTaskName(originalName)
+		if err != nil {
+			return err
+		}
+	}
+	for _, task := range tasks {
+		taskName, err := normalizeTaskName(task.Name)
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(taskName, candidate) && !strings.EqualFold(taskName, originalName) {
+			return errors.New("任务名已存在，请换一个名称。")
+		}
+	}
+	return nil
 }
 
 // taskExists 查询指定任务是否存在于本机任务计划程序。

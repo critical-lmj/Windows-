@@ -125,6 +125,56 @@ func TestNormalizeTaskNamePreservesUserInput(t *testing.T) {
 	}
 }
 
+func TestValidateTaskNameAvailability(t *testing.T) {
+	tasks := []Task{
+		{Name: `\Existing`},
+		{Name: `\Folder\Daily`},
+	}
+	tests := []struct {
+		name      string
+		candidate string
+		original  string
+		wantError string
+	}{
+		{
+			name:      "new task rejects an existing name regardless of case",
+			candidate: "existing",
+			wantError: "已存在",
+		},
+		{
+			name:      "edit accepts its unchanged name",
+			candidate: "Existing",
+			original:  `\Existing`,
+		},
+		{
+			name:      "edit rejects another existing task name",
+			candidate: `\Folder\Daily`,
+			original:  `\Existing`,
+			wantError: "已存在",
+		},
+		{
+			name:      "invalid name is reported before duplicate validation",
+			candidate: `Existing:Copy`,
+			wantError: "非法字符",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateTaskNameAvailability(test.candidate, test.original, tasks)
+			if test.wantError == "" {
+				if err != nil {
+					t.Fatalf("validateTaskNameAvailability() returned error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("validateTaskNameAvailability() error = %v, want containing %q", err, test.wantError)
+			}
+		})
+	}
+}
+
 func TestRunCommandWithTimeoutStopsHungProcess(t *testing.T) {
 	cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcess", "--", "sleep")
 	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
