@@ -6,9 +6,13 @@
 # Runtime logs and temporary files
 *.log
 *.tmp
+logs/
 
 # Portable Go toolchain, module cache, and build cache
 .runtime/
+
+# Local AI agent skills
+.agents/
 
 # IDE settings
 .vscode/

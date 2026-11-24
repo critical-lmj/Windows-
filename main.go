@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	unicodeutf16 "unicode/utf16"
@@ -41,6 +42,7 @@ type Task struct {
 	Author       string
 	Comment      string
 	Enabled      bool
+	CreatedTime  string
 }
 
 // TaskCreateConfig 收集“新建任务”窗口中的输入，再转换为 schtasks.exe 参数。
@@ -57,6 +59,7 @@ type TaskCreateConfig struct {
 	Program               string   `json:"program"`
 	Arguments             string   `json:"arguments"`
 	StartIn               string   `json:"startIn"`
+	EnableAudit           bool     `json:"enableAudit"`
 }
 
 type saveTaskRequest struct {
@@ -67,6 +70,8 @@ type saveTaskRequest struct {
 
 type schedulerTaskXML struct {
 	RegistrationInfo struct {
+		Date        string `xml:"Date"`
+		Author      string `xml:"Author"`
 		Description string `xml:"Description"`
 	} `xml:"RegistrationInfo"`
 	Principals struct {
@@ -176,6 +181,15 @@ var (
 	searchScopeLabel    win.HWND
 	actionLabel         win.HWND
 	detailGroup         win.HWND
+	tabDetailButton     win.HWND
+	tabHistoryButton    win.HWND
+	tabAuditButton      win.HWND
+	enableChannelBtn    win.HWND
+	exportLogButton     win.HWND
+	currentDetailTab    int
+	lastSelectedTask    *Task
+	pendingHistoryText  string
+	pendingAuditText    string
 	refreshButton       win.HWND
 	createButtonHwnd    win.HWND
 	importButton        win.HWND
@@ -187,6 +201,8 @@ var (
 	enableButton        win.HWND
 	disableButton       win.HWND
 	deleteButton        win.HWND
+	toggleAuditButton   win.HWND
+	autoChannelOnce     sync.Once
 	uiFont              win.HFONT
 	titleFont           win.HFONT
 	sectionFont         win.HFONT
@@ -228,50 +244,59 @@ const (
 	ownerDrawButton = 4 // ODT_BUTTON，旧版 win 绑定未导出该常量。
 
 	// 主窗口控件 ID。WM_COMMAND 事件通过这些 ID 区分按钮、输入框和下拉框。
-	idSearch          = 1001
-	idFilterField     = 1002
-	idStatus          = 1003
-	idRefresh         = 1004
-	idCreate          = 1005
-	idRun             = 1006
-	idEnd             = 1007
-	idEnable          = 1008
-	idDisable         = 1009
-	idDelete          = 1010
-	idList            = 1011
-	idEdit            = 1012
-	idImport          = 1013
-	idExport          = 1014
-	idBackup          = 1015
-	msgEditLoaded     = win.WM_APP + 4
-	msgEditFailed     = win.WM_APP + 5
-	msgActionDone     = win.WM_APP + 6
-	msgActionFailed   = win.WM_APP + 7
-	msgWizardSaved    = win.WM_APP + 8
-	msgWizardSaveFail = win.WM_APP + 9
-	msgArchiveDone    = win.WM_APP + 10
-	msgImportReady    = win.WM_APP + 11
-	msgImportDone     = win.WM_APP + 12
-	msgCreateTask     = win.WM_APP + 1
-	msgTasksLoaded    = win.WM_APP + 2
-	msgTasksFailed    = win.WM_APP + 3
-	idWizardName      = 3001
-	idWizardDesc      = 3002
-	idWizardSched     = 3003
-	idWizardTime      = 3004
-	idWizardProg      = 3005
-	idWizardArgs      = 3006
-	idWizardStart     = 3007
-	idWizardBrowse    = 3008
-	idWizardCreate    = 3009
-	idWizardCancel    = 3010
-	idWizardBrowseDir = 3011
-	idWizardDate      = 3012
-	idWizardMonthDay  = 3013
-	idWizardRepeat    = 3014
-	idWizardRepeatInt = 3015
-	idWizardRepeatDur = 3016
-	idWizardWeekBase  = 3020
+	idSearch           = 1001
+	idFilterField      = 1002
+	idStatus           = 1003
+	idRefresh          = 1004
+	idCreate           = 1005
+	idRun              = 1006
+	idEnd              = 1007
+	idEnable           = 1008
+	idDisable          = 1009
+	idDelete           = 1010
+	idList             = 1011
+	idEdit             = 1012
+	idImport           = 1013
+	idExport           = 1014
+	idBackup           = 1015
+	idTabDetail        = 1016
+	idTabHistory       = 1017
+	idTabAudit         = 1018
+	idEnableChannel    = 1019
+	idExportLog        = 1020
+	idToggleAudit      = 1021
+	msgHistoryLoaded   = win.WM_APP + 13
+	msgAuditLoaded     = win.WM_APP + 14
+	msgEditLoaded      = win.WM_APP + 4
+	msgEditFailed      = win.WM_APP + 5
+	msgActionDone      = win.WM_APP + 6
+	msgActionFailed    = win.WM_APP + 7
+	msgWizardSaved     = win.WM_APP + 8
+	msgWizardSaveFail  = win.WM_APP + 9
+	msgArchiveDone     = win.WM_APP + 10
+	msgImportReady     = win.WM_APP + 11
+	msgImportDone      = win.WM_APP + 12
+	msgCreateTask      = win.WM_APP + 1
+	msgTasksLoaded     = win.WM_APP + 2
+	msgTasksFailed     = win.WM_APP + 3
+	idWizardName       = 3001
+	idWizardDesc       = 3002
+	idWizardSched      = 3003
+	idWizardTime       = 3004
+	idWizardProg       = 3005
+	idWizardArgs       = 3006
+	idWizardStart      = 3007
+	idWizardBrowse     = 3008
+	idWizardCreate     = 3009
+	idWizardCancel     = 3010
+	idWizardBrowseDir  = 3011
+	idWizardDate       = 3012
+	idWizardMonthDay   = 3013
+	idWizardRepeat     = 3014
+	idWizardRepeatInt  = 3015
+	idWizardRepeatDur  = 3016
+	idWizardAuditCheck = 3017
+	idWizardWeekBase   = 3020
 
 	externalCommandTimeout = 30 * time.Second
 	metadataCommandTimeout = 8 * time.Second
@@ -300,6 +325,7 @@ var (
 	wizardProgram      win.HWND
 	wizardArgs         win.HWND
 	wizardStartIn      win.HWND
+	wizardAuditCheck   win.HWND
 	wizardSubmitButton win.HWND
 )
 
@@ -472,7 +498,9 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		setMainToolbarEnabled(true)
 		allTasks = pendingTasks
 		pendingTasks = nil
+		getGlobalAuditPolicyStore().load()
 		applyFilter()
+		autoEnableHistoryChannelForAuditedTasks(allTasks)
 		return 0
 	case msgTasksFailed:
 		debugLog("UI received msgTasksFailed: %s", lastLoadError)
@@ -561,6 +589,12 @@ func wndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 	case msgImportDone:
 		finishArchiveOperation("导入完成", archiveResultSummary(pendingTransfer, ""), true)
 		return 0
+	case msgHistoryLoaded:
+		setWindowText(detailEdit, pendingHistoryText)
+		return 0
+	case msgAuditLoaded:
+		setWindowText(detailEdit, pendingAuditText)
+		return 0
 	case win.WM_DESTROY:
 		win.KillTimer(hwnd, idWatchdogTimer)
 		if uiFont != 0 {
@@ -613,6 +647,9 @@ func createControls(hwnd win.HWND) {
 	comboAdd(statusCombo, "全部状态")
 	comboAdd(statusCombo, "仅启用")
 	comboAdd(statusCombo, "仅禁用")
+	comboAdd(statusCombo, "仅自定义任务")
+	comboAdd(statusCombo, "仅系统任务")
+	comboAdd(statusCombo, "仅已开审计")
 	win.SendMessage(statusCombo, win.CB_SETCURSEL, 0, 0)
 
 	backupButton = createButton(hwnd, "备份全部", 798, 91, 88, 30, idBackup)
@@ -629,6 +666,7 @@ func createControls(hwnd win.HWND) {
 	enableButton = createButton(hwnd, "启用", 342, 127, 70, 30, idEnable)
 	disableButton = createButton(hwnd, "禁用", 420, 127, 70, 30, idDisable)
 	deleteButton = createButton(hwnd, "删除", 498, 127, 70, 30, idDelete)
+	toggleAuditButton = createButton(hwnd, "开启审计", 576, 127, 84, 30, idToggleAudit)
 
 	listView = createWindow(
 		"SysListView32",
@@ -648,26 +686,31 @@ func createControls(hwnd win.HWND) {
 	win.SendMessage(listView, win.LVM_SETBKCOLOR, 0, uintptr(rgb(255, 255, 255)))
 	win.SendMessage(listView, win.LVM_SETTEXTBKCOLOR, 0, uintptr(rgb(255, 255, 255)))
 	win.SendMessage(listView, win.LVM_SETTEXTCOLOR, 0, uintptr(rgb(15, 23, 42)))
-	addColumn(0, "任务名称", 220)
+	addColumn(0, "任务名称", 200)
 	addColumn(1, "状态", 82)
-	addColumn(2, "下次运行", 145)
-	addColumn(3, "上次运行", 145)
-	addColumn(4, "结果", 88)
-	addColumn(5, "触发器", 150)
-	addColumn(6, "位置", 190)
-	addColumn(7, "执行命令", 440)
+	addColumn(2, "日志审计", 116)
+	addColumn(3, "下次运行", 140)
+	addColumn(4, "上次运行", 140)
+	addColumn(5, "结果", 80)
+	addColumn(6, "创建时间", 140)
+	addColumn(7, "触发器", 140)
+	addColumn(8, "位置", 180)
+	addColumn(9, "执行命令", 400)
 
-	detailGroup = createLabel(hwnd, "任务详情", 900, 164, 390, 24)
-	setControlFont(detailGroup, sectionFont)
+	tabDetailButton = createButton(hwnd, "详情", 900, 127, 48, 30, idTabDetail)
+	tabHistoryButton = createButton(hwnd, "运行历史", 952, 127, 72, 30, idTabHistory)
+	tabAuditButton = createButton(hwnd, "操作审计", 1028, 127, 72, 30, idTabAudit)
+	enableChannelBtn = createButton(hwnd, "启用历史", 1104, 127, 72, 30, idEnableChannel)
+	exportLogButton = createButton(hwnd, "导出日志", 1180, 127, 72, 30, idExportLog)
 	detailEdit = createWindowEx(
 		win.WS_EX_CLIENTEDGE,
 		"EDIT",
 		"选择一条任务后，这里会显示完整配置。",
 		win.WS_CHILD|win.WS_VISIBLE|win.ES_MULTILINE|win.ES_AUTOVSCROLL|win.ES_READONLY|win.WS_VSCROLL,
 		914,
-		194,
+		164,
 		362,
-		500,
+		530,
 		hwnd,
 		0,
 	)
@@ -685,11 +728,11 @@ func layoutControls(hwnd win.HWND) {
 		contentTop := int32(164)
 		contentHeight := height - contentTop - margin
 		detailWidth := width / 3
-		if detailWidth < 330 {
-			detailWidth = 330
+		if detailWidth < 360 {
+			detailWidth = 360
 		}
-		if detailWidth > 420 {
-			detailWidth = 420
+		if detailWidth > 450 {
+			detailWidth = 450
 		}
 		gap := int32(16)
 		listWidth := width - margin*2 - gap - detailWidth
@@ -717,15 +760,30 @@ func layoutControls(hwnd win.HWND) {
 		win.MoveWindow(enableButton, 342, 127, 70, 30, true)
 		win.MoveWindow(disableButton, 420, 127, 70, 30, true)
 		win.MoveWindow(deleteButton, 498, 127, 70, 30, true)
+		win.MoveWindow(toggleAuditButton, 576, 127, 84, 30, true)
+		win.MoveWindow(tabDetailButton, detailLeft, 127, 48, 30, true)
+		win.MoveWindow(tabHistoryButton, detailLeft+52, 127, 72, 30, true)
+		win.MoveWindow(tabAuditButton, detailLeft+128, 127, 72, 30, true)
+		win.MoveWindow(enableChannelBtn, detailLeft+204, 127, 72, 30, true)
+		win.MoveWindow(exportLogButton, detailLeft+280, 127, 72, 30, true)
 		win.MoveWindow(listView, margin, contentTop, listWidth, contentHeight, true)
-		win.MoveWindow(detailGroup, detailLeft, contentTop, detailWidth, 24, true)
-		win.MoveWindow(detailEdit, detailLeft, contentTop+30, detailWidth, contentHeight-30, true)
+		win.MoveWindow(detailEdit, detailLeft, contentTop, detailWidth, contentHeight, true)
 	}
 }
 
 // handleCommand 分发控件命令并触发筛选、任务操作或导入导出流程。
 func handleCommand(id, code uint16) {
 	switch id {
+	case idTabDetail:
+		switchDetailTab(0)
+	case idTabHistory:
+		switchDetailTab(1)
+	case idTabAudit:
+		switchDetailTab(2)
+	case idEnableChannel:
+		enableHistoryChannelAction()
+	case idExportLog:
+		exportLogAction()
 	case idSearch:
 		if code == win.EN_CHANGE {
 			applyFilter()
@@ -763,6 +821,8 @@ func handleCommand(id, code uint16) {
 		taskAction("disable")
 	case idDelete:
 		taskAction("delete")
+	case idToggleAudit:
+		toggleTaskAuditAction()
 	}
 }
 
@@ -777,7 +837,10 @@ func handleNotify(lParam uintptr) uintptr {
 		return 0
 	}
 	if hdr.Code == win.LVN_ITEMCHANGED {
-		updateTaskDetailFromSelection()
+		nmlv := (*win.NMLISTVIEW)(unsafe.Pointer(lParam))
+		if nmlv.UChanged&win.LVIF_STATE != 0 && (nmlv.UNewState&win.LVIS_SELECTED) != (nmlv.UOldState&win.LVIS_SELECTED) {
+			updateTaskDetailFromSelection()
+		}
 		return 0
 	}
 	if hdr.Code == win.NM_CUSTOMDRAW {
@@ -900,6 +963,24 @@ func refreshTasksAsync() {
 	}()
 }
 
+// taskMatchesStatusFilter 判断任务是否满足状态/分类筛选下拉框条件。
+func taskMatchesStatusFilter(task Task, stateIndex int) bool {
+	switch stateIndex {
+	case 1:
+		return task.Enabled
+	case 2:
+		return !task.Enabled
+	case 3:
+		return !isSystemTask(task)
+	case 4:
+		return isSystemTask(task)
+	case 5:
+		return isTaskAuditEnabled(task)
+	default:
+		return true
+	}
+}
+
 // applyFilter 根据搜索框、筛选字段和启用状态生成当前列表 viewTasks。
 func applyFilter() {
 	query := strings.ToLower(strings.TrimSpace(windowText(searchEdit)))
@@ -914,10 +995,7 @@ func applyFilter() {
 		if query != "" && !taskMatches(task, field, query) {
 			continue
 		}
-		if stateIndex == 1 && !task.Enabled {
-			continue
-		}
-		if stateIndex == 2 && task.Enabled {
+		if !taskMatchesStatusFilter(task, stateIndex) {
 			continue
 		}
 		viewTasks = append(viewTasks, task)
@@ -930,7 +1008,7 @@ func applyFilter() {
 func renderList() {
 	win.SendMessage(listView, win.LVM_DELETEALLITEMS, 0, 0)
 	for i, task := range viewTasks {
-		values := []string{task.ShortName, task.Status, task.NextRunTime, task.LastRunTime, task.LastResult, task.ScheduleType, task.Location, task.TaskToRun}
+		values := []string{task.ShortName, task.Status, taskAuditStatusText(task), task.NextRunTime, task.LastRunTime, task.LastResult, task.CreatedTime, task.ScheduleType, task.Location, task.TaskToRun}
 		insertItem(i, values)
 	}
 	if index := defaultTaskSelectionIndex(len(viewTasks)); index >= 0 && index < len(viewTasks) {
@@ -940,6 +1018,82 @@ func renderList() {
 		return
 	}
 	updateTaskDetail()
+}
+
+// autoEnableHistoryChannelForAuditedTasks 当存在开启了日志审计的任务（包含所有自定义任务）时，
+// 若当前具备管理员权限且底层事件历史通道未启用，则在后台自动开启通道。
+func autoEnableHistoryChannelForAuditedTasks(tasks []Task) {
+	if !isElevated() {
+		return
+	}
+	hasAuditedTask := false
+	for _, task := range tasks {
+		if isTaskAuditEnabled(task) {
+			hasAuditedTask = true
+			break
+		}
+	}
+	if !hasAuditedTask {
+		return
+	}
+	autoChannelOnce.Do(func() {
+		go func() {
+			enabled, err := isTaskHistoryChannelEnabled()
+			if err == nil && !enabled {
+				if enableErr := enableTaskHistoryChannel(); enableErr == nil {
+					debugLog("auto-enabled task history channel for audited tasks")
+					recordAudit("AUTO_ENABLE_CHANNEL", "Microsoft-Windows-TaskScheduler/Operational", true, "检测到自定义/已开启审计的定时任务，自动启用历史通道", "")
+				} else {
+					debugLog("auto-enable task history channel failed: %v", enableErr)
+				}
+			}
+		}()
+	})
+}
+
+// toggleTaskAuditAction 手动切换当前选中任务的日志审计开启/关闭状态，并持久化存储。
+func toggleTaskAuditAction() {
+	if operationBusy || loadingTasks {
+		return
+	}
+	task, ok := selectedTask()
+	if !ok {
+		return
+	}
+	nextEnabled := !isTaskAuditEnabled(task)
+	if err := setTaskAuditEnabled(task.Name, nextEnabled); err != nil {
+		message(mainWnd, "操作失败", "保存任务审计策略失败："+err.Error())
+		return
+	}
+	actionName := "ENABLE_TASK_AUDIT"
+	desc := "手动开启任务日志审计"
+	if !nextEnabled {
+		actionName = "DISABLE_TASK_AUDIT"
+		desc = "手动关闭任务日志审计"
+	}
+	recordAudit(actionName, task.Name, true, desc, "")
+
+	if nextEnabled {
+		if enabled, err := isTaskHistoryChannelEnabled(); err == nil && !enabled {
+			if enableErr := enableTaskHistoryChannel(); enableErr != nil {
+				message(mainWnd, "部分完成", fmt.Sprintf("已为任务开启审计标记，但系统事件历史通道未能自动开启：%v\r\n\r\n请确保以管理员权限运行或手动点击“启用历史”。", enableErr))
+			} else {
+				recordAudit("ENABLE_CHANNEL", "Microsoft-Windows-TaskScheduler/Operational", true, "手动开启任务审计时同步开启事件通道", "")
+			}
+		}
+	}
+
+	stateIndex := int(win.SendMessage(statusCombo, win.CB_GETCURSEL, 0, 0))
+	if stateIndex == 5 && !nextEnabled {
+		applyFilter()
+		return
+	}
+	selectedIdx := int(win.SendMessage(listView, win.LVM_GETNEXTITEM, ^uintptr(0), win.LVNI_SELECTED))
+	if selectedIdx >= 0 && selectedIdx < len(viewTasks) {
+		setListViewCell(selectedIdx, 2, taskAuditStatusText(task))
+	}
+	updateActionButtons(&task)
+	updateTaskDetail(task)
 }
 
 // defaultTaskSelectionIndex 返回列表重绘后的默认选中项；-1 表示保持无选中状态。
@@ -958,36 +1112,314 @@ func updateTaskDetailFromSelection() {
 	updateTaskDetail()
 }
 
+func switchDetailTab(tab int) {
+	currentDetailTab = tab
+	if lastSelectedTask != nil {
+		updateTaskDetail(*lastSelectedTask)
+	} else {
+		updateTaskDetail()
+	}
+}
+
+func enableHistoryChannelAction() {
+	if err := enableTaskHistoryChannel(); err != nil {
+		message(mainWnd, "启用失败", fmt.Sprintf("无法启用任务历史通道：%v\r\n\r\n请确保程序以管理员权限运行。", err))
+		recordAudit("ENABLE_CHANNEL", "Microsoft-Windows-TaskScheduler/Operational", false, "启用事件通道", err.Error())
+		return
+	}
+	message(mainWnd, "已启用", "已成功启用任务调度历史记录通道。\r\n系统后续执行定时任务时将自动持久化起止时间与退出代码。")
+	recordAudit("ENABLE_CHANNEL", "Microsoft-Windows-TaskScheduler/Operational", true, "启用事件通道", "")
+	if lastSelectedTask != nil {
+		updateTaskDetail(*lastSelectedTask)
+	}
+}
+
+func exportLogAction() {
+	if operationBusy || loadingTasks {
+		return
+	}
+	tab := currentDetailTab
+	if tab == 0 {
+		if lastSelectedTask != nil {
+			tab = 1
+		} else {
+			tab = 2
+		}
+	}
+
+	if tab == 1 && lastSelectedTask != nil && !isTaskAuditEnabled(*lastSelectedTask) {
+		ret := win.MessageBox(mainWnd, utf16(fmt.Sprintf("任务 [%s] 当前尚未开启日志审计（保留默认状态）。\r\n\r\n是否立即为其手动开启日志审计并继续导出运行历史？", lastSelectedTask.ShortName)), utf16("开启日志审计确认"), win.MB_YESNO|win.MB_ICONQUESTION)
+		if ret != win.IDYES {
+			return
+		}
+		if err := setTaskAuditEnabled(lastSelectedTask.Name, true); err != nil {
+			message(mainWnd, "操作失败", "保存审计策略失败："+err.Error())
+			return
+		}
+		recordAudit("ENABLE_TASK_AUDIT", lastSelectedTask.Name, true, "导出前手动开启任务日志审计", "")
+		if enabled, chErr := isTaskHistoryChannelEnabled(); chErr == nil && !enabled {
+			_ = enableTaskHistoryChannel()
+		}
+		selectedIdx := int(win.SendMessage(listView, win.LVM_GETNEXTITEM, ^uintptr(0), win.LVNI_SELECTED))
+		if selectedIdx >= 0 && selectedIdx < len(viewTasks) {
+			setListViewCell(selectedIdx, 2, taskAuditStatusText(*lastSelectedTask))
+		}
+		updateActionButtons(lastSelectedTask)
+	}
+
+	limit, ok := promptExportLimitDialog(mainWnd, "200")
+	if !ok {
+		return
+	}
+
+	nowStr := time.Now().Format("20060102_150405")
+
+	if tab == 1 {
+		var targetTaskName string
+		var defaultName string
+		if lastSelectedTask != nil {
+			targetTaskName = lastSelectedTask.Name
+			short := lastSelectedTask.ShortName
+			if short == "" {
+				short = "task"
+			}
+			defaultName = fmt.Sprintf("TaskHistory_%s_%s.csv", short, nowStr)
+		} else {
+			defaultName = fmt.Sprintf("TaskHistory_All_%s.csv", nowStr)
+		}
+		path := saveLogCSVDialog("导出运行历史记录 (CSV)", defaultName)
+		if path == "" {
+			return
+		}
+		records, err := queryTaskExecutionHistory(targetTaskName, limit)
+		if err != nil {
+			message(mainWnd, "导出失败", "获取执行历史失败："+err.Error())
+			recordAudit("EXPORT_HISTORY", path, false, "导出运行历史失败", err.Error())
+			return
+		}
+		if len(records) == 0 {
+			message(mainWnd, "无记录", "当前没有可导出的执行历史记录。")
+			return
+		}
+		if err := exportTaskHistoryToCSV(records, path); err != nil {
+			message(mainWnd, "导出失败", "写入 CSV 失败："+err.Error())
+			recordAudit("EXPORT_HISTORY", path, false, "写入CSV失败", err.Error())
+			return
+		}
+		message(mainWnd, "导出成功", fmt.Sprintf("已成功导出 %d 条运行历史记录至：\r\n%s", len(records), path))
+		recordAudit("EXPORT_HISTORY", path, true, fmt.Sprintf("导出 %d 条运行历史", len(records)), "")
+		return
+	}
+
+	var targetTaskName string
+	var defaultName string
+	if lastSelectedTask != nil {
+		targetTaskName = lastSelectedTask.Name
+		short := lastSelectedTask.ShortName
+		if short == "" {
+			short = "task"
+		}
+		defaultName = fmt.Sprintf("AuditLog_%s_%s.csv", short, nowStr)
+	} else {
+		defaultName = fmt.Sprintf("AuditLog_All_%s.csv", nowStr)
+	}
+	path := saveLogCSVDialog("导出操作审计记录 (CSV)", defaultName)
+	if path == "" {
+		return
+	}
+	records, err := readRecentAuditRecords("", targetTaskName, limit)
+	if err != nil {
+		message(mainWnd, "导出失败", "读取审计记录失败："+err.Error())
+		recordAudit("EXPORT_AUDIT", path, false, "读取审计失败", err.Error())
+		return
+	}
+	if len(records) == 0 {
+		message(mainWnd, "无记录", "当前没有可导出的管理操作审计记录。")
+		return
+	}
+	if err := exportAuditRecordsToCSV(records, path); err != nil {
+		message(mainWnd, "导出失败", "写入 CSV 失败："+err.Error())
+		recordAudit("EXPORT_AUDIT", path, false, "写入CSV失败", err.Error())
+		return
+	}
+	message(mainWnd, "导出成功", fmt.Sprintf("已成功导出 %d 条管理操作审计记录至：\r\n%s", len(records), path))
+	recordAudit("EXPORT_AUDIT", path, true, fmt.Sprintf("导出 %d 条审计记录", len(records)), "")
+}
+
 // updateTaskDetail 显示指定任务的完整信息；未提供任务时显示引导文本并禁用操作。
 func updateTaskDetail(tasks ...Task) {
 	if detailEdit == 0 {
 		return
 	}
 	if len(tasks) == 0 {
-		setWindowText(detailEdit, "选择一条任务后，这里会显示完整配置。\r\n\r\n提示：浅绿色表示正在运行，灰色表示已禁用。")
+		lastSelectedTask = nil
 		updateActionButtons(nil)
+		switch currentDetailTab {
+		case 1:
+			setWindowText(detailEdit, "【运行历史流】\r\n\r\n选择左侧一条任务后，即可查看该任务的历史调度与执行记录。\r\n\r\n提示：若系统历史通道未开启，可点击上方“启用历史”按钮。")
+		case 2:
+			setWindowText(detailEdit, "正在加载全局管理运维审计记录...")
+			go func() {
+				records, err := readRecentAuditRecords("", "", 50)
+				if err != nil {
+					pendingAuditText = "【管理审计流】\r\n\r\n读取审计记录失败: " + err.Error()
+					win.PostMessage(mainWnd, msgAuditLoaded, 0, 0)
+					return
+				}
+				if len(records) == 0 {
+					pendingAuditText = "【管理审计流】\r\n\r\n暂无本地管理操作审计记录。\r\n\r\n提示：通过本软件执行的新建、修改、启停、删除及导入操作将自动记录于此。"
+					win.PostMessage(mainWnd, msgAuditLoaded, 0, 0)
+					return
+				}
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("全局最近管理操作审计记录（共 %d 条）：\r\n", len(records)))
+				sb.WriteString("========================================\r\n\r\n")
+				for i, r := range records {
+					res := "成功"
+					if !r.Success {
+						res = "失败"
+					}
+					sb.WriteString(fmt.Sprintf("#%02d [%s] 动作: %s | 目标: %s\r\n", i+1, r.Timestamp, r.Action, r.TaskName))
+					sb.WriteString(fmt.Sprintf("    结果: %s | 操作人: %s\r\n", res, r.Operator))
+					if r.Details != "" {
+						sb.WriteString(fmt.Sprintf("    说明: %s\r\n", r.Details))
+					}
+					if r.Error != "" {
+						sb.WriteString(fmt.Sprintf("    错误: %s\r\n", r.Error))
+					}
+					sb.WriteString("\r\n")
+				}
+				pendingAuditText = sb.String()
+				win.PostMessage(mainWnd, msgAuditLoaded, 0, 0)
+			}()
+		default:
+			setWindowText(detailEdit, "选择一条任务后，这里会显示完整配置。\r\n\r\n提示：浅绿色表示正在运行，灰色表示已禁用。")
+		}
 		return
 	}
-	task := tasks[0]
-	scriptPath := taskScriptPath(task)
-	text := fmt.Sprintf(
-		"%s\r\n\r\n状态\r\n  %s\r\n\r\n触发器\r\n  %s\r\n\r\n运行时间\r\n  下次：%s\r\n  上次：%s\r\n  结果：%s\r\n\r\n执行命令\r\n  %s\r\n\r\n脚本路径\r\n  %s\r\n\r\n起始目录\r\n  %s\r\n\r\n任务位置\r\n  %s",
-		task.ShortName,
-		detailValue(task.Status),
-		detailValue(task.ScheduleType),
-		detailValue(task.NextRunTime),
-		detailValue(task.LastRunTime),
-		detailValue(task.LastResult),
-		detailValue(task.TaskToRun),
-		detailValue(scriptPath),
-		detailValue(task.StartIn),
-		detailValue(task.Name),
-	)
-	if strings.TrimSpace(task.Comment) != "" && task.Comment != "N/A" {
-		text += "\r\n\r\n描述\r\n  " + task.Comment
+	t := tasks[0]
+	lastSelectedTask = &t
+	updateActionButtons(&t)
+
+	switch currentDetailTab {
+	case 1:
+		if !isTaskAuditEnabled(t) {
+			kindText := "系统级定时任务"
+			if !isSystemTask(t) {
+				kindText = "自定义定时任务"
+			}
+			setWindowText(detailEdit, fmt.Sprintf("任务: %s\r\n任务分类: %s\r\n日志审计状态: %s\r\n\r\n说明：系统级定时任务默认不主动启用日志审计，避免大量内置系统任务产生冗余日志。\r\n\r\n如需追踪并查看该任务的运行历史记录，请点击左侧工具栏上的【开启审计】按钮手动开启。", t.Name, kindText, taskAuditStatusText(t)))
+			return
+		}
+		setWindowText(detailEdit, fmt.Sprintf("正在查询任务 [%s] 的执行历史记录，请稍候...", t.ShortName))
+		go func(task Task) {
+			enabled, _ := isTaskHistoryChannelEnabled()
+			if !enabled {
+				pendingHistoryText = fmt.Sprintf("任务: %s\r\n\r\n提示：Windows 任务调度历史记录通道未启用。\r\n\r\n请点击上方【启用历史】按钮以启用通道。\r\n系统后续执行该任务时将自动记录起止时间、耗时与退出代码。", task.Name)
+				win.PostMessage(mainWnd, msgHistoryLoaded, 0, 0)
+				return
+			}
+			records, err := queryTaskExecutionHistory(task.Name, 30)
+			if err != nil {
+				pendingHistoryText = fmt.Sprintf("任务: %s\r\n\r\n查询执行历史日志失败：%v", task.Name, err)
+				win.PostMessage(mainWnd, msgHistoryLoaded, 0, 0)
+				return
+			}
+			if len(records) == 0 {
+				pendingHistoryText = fmt.Sprintf("任务: %s\r\n\r\n暂无近期执行历史记录。\r\n\r\n可能原因：\r\n1. 历史通道刚刚开启，该任务尚未再次触发运行；\r\n2. 任务历史日志已按策略轮转清理。", task.Name)
+				win.PostMessage(mainWnd, msgHistoryLoaded, 0, 0)
+				return
+			}
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("任务 [%s] 最近执行历史（共 %d 条）：\r\n", task.ShortName, len(records)))
+			sb.WriteString("========================================\r\n\r\n")
+			for i, r := range records {
+				sb.WriteString(fmt.Sprintf("#%02d 状态: %s\r\n", i+1, r.Status))
+				if r.StartTime != "" {
+					sb.WriteString(fmt.Sprintf("    开始: %s\r\n", r.StartTime))
+				}
+				if r.EndTime != "" {
+					if r.Duration != "" && r.Duration != "-" {
+						sb.WriteString(fmt.Sprintf("    完成: %s (耗时: %s)\r\n", r.EndTime, r.Duration))
+					} else {
+						sb.WriteString(fmt.Sprintf("    完成: %s\r\n", r.EndTime))
+					}
+				} else if r.Status == "运行中" {
+					sb.WriteString("    状态: 正在运行中...\r\n")
+				}
+				if r.ExitCode != "" {
+					sb.WriteString(fmt.Sprintf("    退出代码: %s\r\n", r.ExitCode))
+				}
+				if r.Action != "" {
+					sb.WriteString(fmt.Sprintf("    执行程序: %s\r\n", r.Action))
+				}
+				sb.WriteString("\r\n")
+			}
+			pendingHistoryText = sb.String()
+			win.PostMessage(mainWnd, msgHistoryLoaded, 0, 0)
+		}(t)
+	case 2:
+		setWindowText(detailEdit, fmt.Sprintf("正在查询任务 [%s] 的本地操作审计记录...", t.ShortName))
+		go func(task Task) {
+			records, err := readRecentAuditRecords("", task.Name, 50)
+			if err != nil {
+				pendingAuditText = fmt.Sprintf("任务: %s\r\n\r\n读取审计记录失败: %v", task.Name, err)
+				win.PostMessage(mainWnd, msgAuditLoaded, 0, 0)
+				return
+			}
+			if len(records) == 0 {
+				pendingAuditText = fmt.Sprintf("任务: %s\r\n\r\n暂无关于该任务的本地管理操作记录。\r\n\r\n提示：通过本软件执行的创建、修改、启停、删除及导入操作将自动记录于此。", task.Name)
+				win.PostMessage(mainWnd, msgAuditLoaded, 0, 0)
+				return
+			}
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("任务 [%s] 本地管理操作审计记录（共 %d 条）：\r\n", task.ShortName, len(records)))
+			sb.WriteString("========================================\r\n\r\n")
+			for i, r := range records {
+				res := "成功"
+				if !r.Success {
+					res = "失败"
+				}
+				sb.WriteString(fmt.Sprintf("#%02d [%s] 动作: %s | 结果: %s\r\n", i+1, r.Timestamp, r.Action, res))
+				sb.WriteString(fmt.Sprintf("    操作人: %s\r\n", r.Operator))
+				if r.Details != "" {
+					sb.WriteString(fmt.Sprintf("    说明: %s\r\n", r.Details))
+				}
+				if r.Error != "" {
+					sb.WriteString(fmt.Sprintf("    错误: %s\r\n", r.Error))
+				}
+				sb.WriteString("\r\n")
+			}
+			pendingAuditText = sb.String()
+			win.PostMessage(mainWnd, msgAuditLoaded, 0, 0)
+		}(t)
+	default:
+		scriptPath := taskScriptPath(t)
+		taskCategory := "自定义定时任务"
+		if isSystemTask(t) {
+			taskCategory = "系统级定时任务"
+		}
+		text := fmt.Sprintf(
+			"%s\r\n\r\n任务分类\r\n  %s\r\n\r\n日志审计\r\n  %s\r\n\r\n状态\r\n  %s\r\n\r\n创建时间\r\n  %s\r\n\r\n触发器\r\n  %s\r\n\r\n运行时间\r\n  下次：%s\r\n  上次：%s\r\n  结果：%s\r\n\r\n执行命令\r\n  %s\r\n\r\n脚本路径\r\n  %s\r\n\r\n起始目录\r\n  %s\r\n\r\n任务位置\r\n  %s",
+			t.ShortName,
+			taskCategory,
+			taskAuditStatusText(t),
+			detailValue(t.Status),
+			detailValue(t.CreatedTime),
+			detailValue(t.ScheduleType),
+			detailValue(t.NextRunTime),
+			detailValue(t.LastRunTime),
+			detailValue(t.LastResult),
+			detailValue(t.TaskToRun),
+			detailValue(scriptPath),
+			detailValue(t.StartIn),
+			detailValue(t.Name),
+		)
+		if strings.TrimSpace(t.Comment) != "" && t.Comment != "N/A" {
+			text += "\r\n\r\n描述\r\n  " + t.Comment
+		}
+		setWindowText(detailEdit, text)
 	}
-	setWindowText(detailEdit, text)
-	updateActionButtons(&task)
 }
 
 // detailValue 将空值和 N/A 转换为详情面板使用的占位符。
@@ -1005,11 +1437,24 @@ func updateActionButtons(task *Task) {
 	win.EnableWindow(editButton, hasTask)
 	win.EnableWindow(runButton, hasTask)
 	win.EnableWindow(deleteButton, hasTask)
+	if toggleAuditButton != 0 {
+		win.EnableWindow(toggleAuditButton, hasTask)
+	}
 	if !hasTask {
 		win.EnableWindow(endButton, false)
 		win.EnableWindow(enableButton, false)
 		win.EnableWindow(disableButton, false)
+		if toggleAuditButton != 0 {
+			setWindowText(toggleAuditButton, "开启审计")
+		}
 		return
+	}
+	if toggleAuditButton != 0 {
+		if isTaskAuditEnabled(*task) {
+			setWindowText(toggleAuditButton, "关闭审计")
+		} else {
+			setWindowText(toggleAuditButton, "开启审计")
+		}
 	}
 	running := strings.EqualFold(task.Status, "Running") || task.Status == "正在运行"
 	win.EnableWindow(endButton, running)
@@ -1161,16 +1606,17 @@ func editSelectedTask() {
 	setMainToolbarEnabled(false)
 	updateActionButtons(nil)
 	setWindowText(statLabel, "正在读取任务定义，请稍候...")
-	taskName := task.Name
+	taskCopy := task
 	go func() {
-		config, err := loadTaskConfig(taskName)
+		config, err := loadTaskConfig(taskCopy.Name)
 		if err != nil {
 			lastEditError = err.Error()
 			win.PostMessage(mainWnd, msgEditFailed, 0, 0)
 			return
 		}
+		config.EnableAudit = isTaskAuditEnabled(taskCopy)
 		pendingEditConfig = config
-		pendingEditOriginal = taskName
+		pendingEditOriginal = taskCopy.Name
 		win.PostMessage(mainWnd, msgEditLoaded, 0, 0)
 	}()
 }
@@ -1182,6 +1628,41 @@ func loadTaskConfig(name string) (TaskCreateConfig, error) {
 		return TaskCreateConfig{}, fmt.Errorf("读取任务定义失败：%s", err.Error())
 	}
 	return parseTaskXMLConfig(name, out)
+}
+
+// parseTaskXMLCreatedTime 从任务 XML 提取任务创建时间。
+func parseTaskXMLCreatedTime(xmlText string) string {
+	xmlText = normalizeTaskXMLText(xmlText)
+	var definition schedulerTaskXML
+	if err := xml.Unmarshal([]byte(xmlText), &definition); err != nil {
+		return ""
+	}
+	return formatTaskDateTime(definition.RegistrationInfo.Date)
+}
+
+// formatTaskDateTime 尝试将 ISO 8601 或其他格式的时间字符串格式化为标准展示时间。
+func formatTaskDateTime(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.EqualFold(value, "N/A") {
+		return "N/A"
+	}
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05",
+		"2006/01/02 15:04:05",
+		"2006/1/2 15:04:05",
+		"2006/1/2 15:04",
+	} {
+		if t, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			if t.Year() <= 1901 {
+				return "N/A"
+			}
+			return t.Format("2006/01/02 15:04:05")
+		}
+	}
+	return normalizeTaskRunTime(value)
 }
 
 // parseTaskXMLConfig 从任务 XML 提取当前编辑器支持的触发器、动作和权限配置。
@@ -1208,6 +1689,7 @@ func parseTaskXMLConfig(name, xmlText string) (TaskCreateConfig, error) {
 		Program:     action.Command,
 		Arguments:   action.Arguments,
 		StartIn:     action.WorkingDirectory,
+		EnableAudit: isTaskAuditEnabled(Task{Name: name, Author: definition.RegistrationInfo.Author}),
 	}
 	var err error
 	switch {
@@ -1342,6 +1824,7 @@ func taskAction(action string) {
 			if text == "" {
 				text = err.Error()
 			}
+			recordAudit(strings.ToUpper(action), task.Name, false, "操作失败", text)
 			lastActionTitle = "操作失败"
 			lastActionMessage = text
 			win.PostMessage(mainWnd, msgActionFailed, 0, 0)
@@ -1350,6 +1833,10 @@ func taskAction(action string) {
 		if text == "" {
 			text = "操作已完成。"
 		}
+		if action == "delete" {
+			_ = getGlobalAuditPolicyStore().DeleteTask(task.Name)
+		}
+		recordAudit(strings.ToUpper(action), task.Name, true, "操作完成: "+text, "")
 		lastActionTitle = "操作完成"
 		lastActionMessage = text
 		win.PostMessage(mainWnd, msgActionDone, 0, 0)
@@ -1469,6 +1956,11 @@ func exportTasksAsync(tasks []Task, outputPath, status string) {
 			debugLog("archive export ZIP write finished path=%q", outputPath)
 		}
 		pendingTransfer = summary.Results
+		if pendingArchiveError != "" {
+			recordAudit("EXPORT", outputPath, false, "导出/备份失败", pendingArchiveError)
+		} else {
+			recordAudit("EXPORT", outputPath, true, fmt.Sprintf("成功导出/备份 %d 项任务", len(summary.Items)), "")
+		}
 		debugLog("archive export posts completion error=%q", pendingArchiveError)
 		win.PostMessage(mainWnd, msgArchiveDone, 0, 0)
 	}()
@@ -1539,6 +2031,15 @@ func startTaskImportAsync(plan []TaskImportPlanItem) {
 	setWindowText(statLabel, "正在导入任务，请稍候...")
 	go func() {
 		pendingTransfer = applyTaskImportPlan(plan, restoreTaskXML)
+		for _, r := range pendingTransfer {
+			if r.Skipped {
+				recordAudit("IMPORT", r.Name, true, "任务导入已跳过", "")
+			} else if r.Err != nil {
+				recordAudit("IMPORT", r.Name, false, "任务导入失败", r.Err.Error())
+			} else {
+				recordAudit("IMPORT", r.Name, true, "任务导入成功", "")
+			}
+		}
 		win.PostMessage(mainWnd, msgImportDone, 0, 0)
 	}()
 }
@@ -1613,6 +2114,7 @@ func createBasicTask() {
 	cfg.Program = strings.TrimSpace(windowText(wizardProgram))
 	cfg.Arguments = strings.TrimSpace(windowText(wizardArgs))
 	cfg.StartIn = strings.TrimSpace(windowText(wizardStartIn))
+	cfg.EnableAudit = wizardAuditCheck == 0 || win.SendMessage(wizardAuditCheck, win.BM_GETCHECK, 0, 0) == win.BST_CHECKED
 	originalName := strings.TrimSpace(wizardOriginalName)
 	if err := validateTaskNameAvailability(cfg.Name, originalName, allTasks); err != nil {
 		debugLog("createBasicTask name validation failed: %v", err)
@@ -1650,7 +2152,18 @@ func createBasicTask() {
 }
 
 // saveTaskConfig 创建或更新任务，并在需要改名时完成新任务创建和旧任务删除。
-func saveTaskConfig(cfg TaskCreateConfig, originalName string, systemAccount bool) error {
+func saveTaskConfig(cfg TaskCreateConfig, originalName string, systemAccount bool) (err error) {
+	action := "CREATE"
+	if strings.TrimSpace(originalName) != "" {
+		action = "EDIT"
+	}
+	defer func() {
+		if err != nil {
+			recordAudit(action, cfg.Name, false, "任务保存失败", err.Error())
+		} else {
+			recordAudit(action, cfg.Name, true, "任务保存成功", "")
+		}
+	}()
 	if err := validateSystemTaskPrivilege(systemAccount, isElevated()); err != nil {
 		return err
 	}
@@ -1692,6 +2205,24 @@ func saveTaskConfig(cfg TaskCreateConfig, originalName string, systemAccount boo
 			_, _ = runSchtasks("/delete", "/tn", newName, "/f")
 			return errors.New("旧任务无法删除，新任务已回滚：" + strings.TrimSpace(deleteOutput))
 		}
+		_ = getGlobalAuditPolicyStore().RenameTask(originalName, newName)
+	}
+
+	// 同步持久化日志审计策略；若开启审计，确保底层事件历史通道已启用
+	if cfg.EnableAudit {
+		savedTask := Task{Name: newName}
+		if !isTaskAuditEnabled(savedTask) {
+			_ = setTaskAuditEnabled(newName, true)
+		}
+		if enabled, chErr := isTaskHistoryChannelEnabled(); chErr == nil && !enabled {
+			if enableErr := enableTaskHistoryChannel(); enableErr == nil {
+				recordAudit("ENABLE_CHANNEL", "Microsoft-Windows-TaskScheduler/Operational", true, "新建/修改任务时自动开启日志审计", "")
+			} else {
+				debugLog("auto enable task history channel failed: %v", enableErr)
+			}
+		}
+	} else {
+		_ = setTaskAuditEnabled(newName, false)
 	}
 	return nil
 }
@@ -2139,6 +2670,9 @@ func mergeTasksByName(tasks []Task) []Task {
 			if existing.Comment == "" {
 				existing.Comment = task.Comment
 			}
+			if existing.CreatedTime == "" {
+				existing.CreatedTime = task.CreatedTime
+			}
 			continue
 		}
 		indexes[key] = len(merged)
@@ -2265,8 +2799,10 @@ function EmitTask($task) {
         }
       }
     } catch {}
+    $date = ''
+    try { $date = DateText $def.RegistrationInfo.Date } catch {}
   }
-  Emit @($name,$status,$next,$last,$result,$schedule,$command,$startIn,$author,$comment,$enabled)
+  Emit @($name,$status,$next,$last,$result,$schedule,$command,$startIn,$author,$comment,$enabled,$date)
 }
 function Walk($folder) {
   try {
@@ -2322,6 +2858,10 @@ func parsePowerShellTaskOutput(out string) []Task {
 			continue
 		}
 		shortName, location := splitTaskPath(name)
+		created := ""
+		if len(fields) >= 12 {
+			created = normalizeTaskRunTime(fields[11])
+		}
 		tasks = append(tasks, Task{
 			Name:         name,
 			ShortName:    shortName,
@@ -2336,6 +2876,7 @@ func parsePowerShellTaskOutput(out string) []Task {
 			Author:       fields[8],
 			Comment:      fields[9],
 			Enabled:      strings.EqualFold(fields[10], "true"),
+			CreatedTime:  created,
 		})
 	}
 	return tasks
@@ -2420,6 +2961,7 @@ func parseTaskCSVOutput(out string) []Task {
 			Author:       csvCell(row, header, "author", "作者"),
 			Comment:      csvCell(row, header, "comment", "注释", "描述"),
 			Enabled:      !isDisabledStatus(status),
+			CreatedTime:  normalizeTaskRunTime(csvCell(row, header, "creationdate", "createdate", "创建时间", "创建日期")),
 		})
 	}
 	return tasks
@@ -2462,6 +3004,7 @@ func parseTaskListOutput(out string) []Task {
 			Author:       firstField(current, "author", "作者"),
 			Comment:      firstField(current, "comment", "注释", "描述"),
 			Enabled:      !isDisabledStatus(status),
+			CreatedTime:  normalizeTaskRunTime(firstField(current, "creationdate", "createdate", "创建时间", "创建日期")),
 		})
 		current = map[string]string{}
 	}
@@ -2561,6 +3104,9 @@ func runPowerShellWithTimeout(script string, timeout time.Duration) (string, err
 
 // runCommandWithTimeout 执行外部命令、收集输出，并在超时后终止其进程树。
 func runCommandWithTimeout(cmd *exec.Cmd, timeout time.Duration) (string, error) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	}
 	if timeout <= 0 {
 		out, err := cmd.CombinedOutput()
 		return decodeANSI(out), err
@@ -3054,6 +3600,19 @@ func insertItem(index int, values []string) {
 	}
 }
 
+// setListViewCell 更新 ListView 指定行和列的单元格文本。
+func setListViewCell(row, col int, value string) {
+	if listView == 0 {
+		return
+	}
+	var item win.LVITEM
+	item.Mask = win.LVIF_TEXT
+	item.IItem = int32(row)
+	item.ISubItem = int32(col)
+	item.PszText = utf16(value)
+	win.SendMessage(listView, win.LVM_SETITEM, 0, uintptr(unsafe.Pointer(&item)))
+}
+
 // comboAdd 向下拉框添加一个文本选项。
 func comboAdd(hwnd win.HWND, text string) {
 	win.SendMessage(hwnd, win.CB_ADDSTRING, 0, uintptr(unsafe.Pointer(utf16(text))))
@@ -3193,6 +3752,7 @@ func wizardWndProc(hwnd win.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		wizardWnd = 0
 		wizardInitialConfig = nil
 		wizardOriginalName = ""
+		wizardAuditCheck = 0
 		return 0
 	}
 	return win.DefWindowProc(hwnd, msg, wParam, lParam)
@@ -3264,7 +3824,10 @@ func createWizardControls(hwnd win.HWND) {
 	wizardStartIn = createWindow("EDIT", "", win.WS_CHILD|win.WS_VISIBLE|win.WS_BORDER|win.ES_AUTOHSCROLL, 116, 398, 526, 28, hwnd, idWizardStart)
 	createButton(hwnd, "浏览...", 652, 397, 90, 30, idWizardBrowseDir)
 
-	permissionNote := createLabel(hwnd, "权限：任务将以 NT AUTHORITY\\SYSTEM 账户和最高权限运行，无需保存用户密码。\r\n关机触发器会忽略开始日期、时间点和重复间隔。", 30, 450, 720, 48)
+	wizardAuditCheck = createWindow("BUTTON", "开启日志审计（记录任务执行历史与运行状态）", win.WS_CHILD|win.WS_VISIBLE|win.BS_AUTOCHECKBOX, 34, 442, 420, 24, hwnd, idWizardAuditCheck)
+	win.SendMessage(wizardAuditCheck, win.BM_SETCHECK, win.BST_CHECKED, 0)
+
+	permissionNote := createLabel(hwnd, "权限：任务将以 NT AUTHORITY\\SYSTEM 账户和最高权限运行，无需保存用户密码。\r\n关机触发器会忽略开始日期、时间点和重复间隔。", 30, 470, 720, 36)
 	setControlFont(permissionNote, sectionFont)
 	wizardSubmitButton = createButton(hwnd, "创建任务", 560, 514, 96, 32, idWizardCreate)
 	createButton(hwnd, "取消", 666, 514, 76, 32, idWizardCancel)
@@ -3278,6 +3841,13 @@ func createWizardControls(hwnd win.HWND) {
 
 // populateWizard 将任务配置填充到创建或修改窗口的各控件。
 func populateWizard(config TaskCreateConfig) {
+	if wizardAuditCheck != 0 {
+		auditState := uintptr(win.BST_UNCHECKED)
+		if config.EnableAudit {
+			auditState = win.BST_CHECKED
+		}
+		win.SendMessage(wizardAuditCheck, win.BM_SETCHECK, auditState, 0)
+	}
 	name := strings.TrimSpace(config.Name)
 	if strings.HasPrefix(name, `\`) && strings.Count(name, `\`) == 1 {
 		name = strings.TrimPrefix(name, `\`)
@@ -3678,21 +4248,121 @@ func openTaskImportDialog() string {
 	return runExternalPicker(mainWnd, script, "选择导入文件失败")
 }
 
-// saveTaskArchiveDialog 打开任务 ZIP 导出或备份的保存位置选择框。
-func saveTaskArchiveDialog(title, defaultName string) string {
+// saveFileDialog 打开保存文件对话框并返回用户选择的目标文件路径。
+func saveFileDialog(title, defaultName, filter, defaultExt string) string {
 	script := strings.Join([]string{
 		"Add-Type -AssemblyName System.Windows.Forms",
 		"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
 		"$d = New-Object System.Windows.Forms.SaveFileDialog",
 		"$d.Title = '" + title + "'",
-		"$d.Filter = '任务备份包 (*.zip)|*.zip'",
-		"$d.DefaultExt = 'zip'",
+		"$d.Filter = '" + filter + "'",
+		"$d.DefaultExt = '" + defaultExt + "'",
 		"$d.AddExtension = $true",
 		"$d.OverwritePrompt = $true",
 		"$d.FileName = '" + defaultName + "'",
 		"if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [IO.File]::WriteAllText($env:CODEX_PICKER_OUT, $d.FileName, [System.Text.Encoding]::UTF8) }",
 	}, "\r\n")
 	return runExternalPicker(mainWnd, script, "选择保存位置失败")
+}
+
+// saveTaskArchiveDialog 打开任务 ZIP 导出或备份的保存位置选择框。
+func saveTaskArchiveDialog(title, defaultName string) string {
+	return saveFileDialog(title, defaultName, "任务备份包 (*.zip)|*.zip", "zip")
+}
+
+// saveLogCSVDialog 打开日志 CSV 导出的保存位置选择框。
+func saveLogCSVDialog(title, defaultName string) string {
+	return saveFileDialog(title, defaultName, "CSV 表格文件 (*.csv)|*.csv|文本文件 (*.txt)|*.txt", "csv")
+}
+
+// parseExportLimitInput 解析导出条数输入字符串。
+// 返回:
+//   - (limit, nil): 成功解析，若输入 "0" 或 "-1" 则返回 -1 表示不限制数量；若输入空字符串则默认返回 200；正整数返回其数值。
+//   - (0, error): 输入小于 -1 的负数或非数字非法字符。
+func parseExportLimitInput(input string) (int, error) {
+	s := strings.TrimSpace(input)
+	if s == "" {
+		return 200, nil
+	}
+	if s == "0" || s == "-1" {
+		return -1, nil
+	}
+	val, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("请输入有效的数字：%w", err)
+	}
+	if val < -1 {
+		return 0, fmt.Errorf("条数不能为小于 -1 的负数，如需不限制数量请输入 0 或 -1")
+	}
+	if val == 0 || val == -1 {
+		return -1, nil
+	}
+	return val, nil
+}
+
+// promptExportLimitDialog 弹出导出条数设置对话框，提示用户输入条数，包含“输入 0 或 -1 表示不限制”说明。
+// 返回解析后的 limit (-1 表示不限制)，以及用户是否确认 (ok)。
+func promptExportLimitDialog(parent win.HWND, defaultVal string) (int, bool) {
+	if defaultVal == "" {
+		defaultVal = "200"
+	}
+	script := strings.Join([]string{
+		"Add-Type -AssemblyName System.Windows.Forms",
+		"Add-Type -AssemblyName System.Drawing",
+		"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+		"$form = New-Object System.Windows.Forms.Form",
+		"$form.Text = '导出日志设置'",
+		"$form.Size = New-Object System.Drawing.Size(430, 230)",
+		"$form.StartPosition = 'CenterScreen'",
+		"$form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog",
+		"$form.MaximizeBox = $false",
+		"$form.MinimizeBox = $false",
+		"$form.TopMost = $true",
+		"$label = New-Object System.Windows.Forms.Label",
+		"$label.Location = New-Object System.Drawing.Point(20, 18)",
+		"$label.Size = New-Object System.Drawing.Size(380, 55)",
+		"$label.Text = \"请输入要导出的最大记录条数：`r`n`r`n提示：输入 0 或 -1 表示导出全部（不限制数量）。\"",
+		"$textBox = New-Object System.Windows.Forms.TextBox",
+		"$textBox.Location = New-Object System.Drawing.Point(20, 80)",
+		"$textBox.Size = New-Object System.Drawing.Size(370, 25)",
+		"$textBox.Text = '" + defaultVal + "'",
+		"$btnOk = New-Object System.Windows.Forms.Button",
+		"$btnOk.Location = New-Object System.Drawing.Point(200, 125)",
+		"$btnOk.Size = New-Object System.Drawing.Size(85, 30)",
+		"$btnOk.Text = '确定'",
+		"$btnOk.DialogResult = [System.Windows.Forms.DialogResult]::OK",
+		"$btnCancel = New-Object System.Windows.Forms.Button",
+		"$btnCancel.Location = New-Object System.Drawing.Point(305, 125)",
+		"$btnCancel.Size = New-Object System.Drawing.Size(85, 30)",
+		"$btnCancel.Text = '取消'",
+		"$btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel",
+		"$form.AcceptButton = $btnOk",
+		"$form.CancelButton = $btnCancel",
+		"$form.Controls.Add($label)",
+		"$form.Controls.Add($textBox)",
+		"$form.Controls.Add($btnOk)",
+		"$form.Controls.Add($btnCancel)",
+		"if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {",
+		"    [IO.File]::WriteAllText($env:CODEX_PICKER_OUT, 'OK:' + $textBox.Text, [System.Text.Encoding]::UTF8)",
+		"} else {",
+		"    [IO.File]::WriteAllText($env:CODEX_PICKER_OUT, 'CANCEL', [System.Text.Encoding]::UTF8)",
+		"}",
+	}, "\r\n")
+
+	raw := runExternalPicker(parent, script, "打开导出设置失败")
+	if raw == "" || raw == "CANCEL" {
+		return 0, false
+	}
+	if !strings.HasPrefix(raw, "OK:") {
+		return 0, false
+	}
+	inputText := strings.TrimPrefix(raw, "OK:")
+	limit, err := parseExportLimitInput(inputText)
+	if err != nil {
+		message(parent, "输入错误", err.Error()+"\n\n本次导出已取消。")
+		return 0, false
+	}
+	return limit, true
 }
 
 // openFolderDialog 打开目录选择框并返回用户选择的本地目录。

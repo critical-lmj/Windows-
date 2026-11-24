@@ -215,6 +215,37 @@ func TestHelperProcess(t *testing.T) {
 	os.Exit(2)
 }
 
+func TestParseTaskXMLCreatedTime(t *testing.T) {
+	xmlText := `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Date>2026-07-21T10:30:00</Date>
+    <Author>SYSTEM</Author>
+    <Description>test description</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <TimeTrigger>
+      <StartBoundary>2026-07-21T10:30:00</StartBoundary>
+    </TimeTrigger>
+  </Triggers>
+  <Actions Context="Author">
+    <Exec>
+      <Command>cmd.exe</Command>
+    </Exec>
+  </Actions>
+</Task>`
+
+	created := parseTaskXMLCreatedTime(xmlText)
+	if created != "2026/07/21 10:30:00" {
+		t.Fatalf("parseTaskXMLCreatedTime = %q, want 2026/07/21 10:30:00", created)
+	}
+
+	missingDateXML := `<Task version="1.2"><RegistrationInfo><Author>SYSTEM</Author></RegistrationInfo></Task>`
+	if empty := parseTaskXMLCreatedTime(missingDateXML); empty != "" && empty != "N/A" {
+		t.Fatalf("parseTaskXMLCreatedTime for missing date = %q, want empty or N/A", empty)
+	}
+}
+
 func TestParseTaskXMLConfigAllSupportedSchedules(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -239,6 +270,9 @@ func TestParseTaskXMLConfigAllSupportedSchedules(t *testing.T) {
 			}
 			if config.Description != "保持名称" || config.StartIn != `D:\work\textphp` {
 				t.Fatalf("metadata was not parsed: %+v", config)
+			}
+			if !config.EnableAudit {
+				t.Fatalf("expected EnableAudit to default to true for modified tasks: %+v", config)
 			}
 		})
 	}
@@ -553,6 +587,31 @@ func TestParsePowerShellTaskOutputNormalizesNeverRunTime(t *testing.T) {
 	}
 }
 
+func TestParsePowerShellTaskOutputWithCreatedTime(t *testing.T) {
+	line := strings.Join([]string{
+		encodeTestField(`\created_task`),
+		encodeTestField("Ready"),
+		encodeTestField("2026/7/31 9:00:00"),
+		encodeTestField("2026/7/30 9:00:00"),
+		encodeTestField("0"),
+		encodeTestField("每天"),
+		encodeTestField(`cmd.exe /c exit 0`),
+		encodeTestField(""),
+		encodeTestField("SYSTEM"),
+		encodeTestField("测试创建时间"),
+		encodeTestField("true"),
+		encodeTestField("2026/07/21 10:30:00"),
+	}, "\t")
+
+	tasks := parsePowerShellTaskOutput(line)
+	if len(tasks) != 1 {
+		t.Fatalf("parsePowerShellTaskOutput() returned %d tasks, want 1", len(tasks))
+	}
+	if tasks[0].CreatedTime != "2026/07/21 10:30:00" {
+		t.Fatalf("CreatedTime = %q, want 2026/07/21 10:30:00", tasks[0].CreatedTime)
+	}
+}
+
 func TestMergeTasksByNameCombinesMultipleTriggers(t *testing.T) {
 	tasks := []Task{
 		{Name: `\Folder\Task`, ScheduleType: "At logon time", TaskToRun: "cmd.exe"},
@@ -616,5 +675,98 @@ func assertNotContains(t *testing.T, values []string, unexpected string) {
 		if value == unexpected {
 			t.Fatalf("args %q should not contain %q", values, unexpected)
 		}
+	}
+}
+
+func TestParseExportLimitInput(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantLimit int
+		wantErr   bool
+	}{
+		{name: "默认空输入", input: "", wantLimit: 200, wantErr: false},
+		{name: "纯空格输入", input: "   ", wantLimit: 200, wantErr: false},
+		{name: "输入0表示不限制", input: "0", wantLimit: -1, wantErr: false},
+		{name: "带空格输入0", input: "  0  ", wantLimit: -1, wantErr: false},
+		{name: "输入-1表示不限制", input: "-1", wantLimit: -1, wantErr: false},
+		{name: "带空格输入-1", input: " -1 ", wantLimit: -1, wantErr: false},
+		{name: "输入正常数值200", input: "200", wantLimit: 200, wantErr: false},
+		{name: "输入正常数值500带空格", input: " 500 ", wantLimit: 500, wantErr: false},
+		{name: "输入正整数1", input: "1", wantLimit: 1, wantErr: false},
+		{name: "非法负数-2", input: "-2", wantLimit: 0, wantErr: true},
+		{name: "非法负数-10", input: "-10", wantLimit: 0, wantErr: true},
+		{name: "非法字母字符串", input: "abc", wantLimit: 0, wantErr: true},
+		{name: "数字字母混合", input: "100a", wantLimit: 0, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseExportLimitInput(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseExportLimitInput(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+			if !tt.wantErr && got != tt.wantLimit {
+				t.Fatalf("parseExportLimitInput(%q) = %d, want %d", tt.input, got, tt.wantLimit)
+			}
+		})
+	}
+}
+
+func TestTaskCreateConfigDefaultsEnableAudit(t *testing.T) {
+	origPolicy := getGlobalAuditPolicyStore()
+	globalAuditPolicy = newAuditPolicyStore(t.TempDir() + `\audit_policy.json`)
+	defer func() { globalAuditPolicy = origPolicy }()
+
+	xmlText := `<?xml version="1.0" encoding="UTF-8"?><Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><RegistrationInfo><Description>修改审计测试</Description></RegistrationInfo><Triggers><TimeTrigger><StartBoundary>2026-07-07T09:00:00</StartBoundary></TimeTrigger></Triggers><Actions><Exec><Command>cmd.exe</Command></Exec></Actions></Task>`
+	cfg, err := parseTaskXMLConfig(`\TestTask`, xmlText)
+	if err != nil {
+		t.Fatalf("parseTaskXMLConfig failed: %v", err)
+	}
+	if !cfg.EnableAudit {
+		t.Fatalf("cfg.EnableAudit must be true by default for custom task edit config, got false")
+	}
+
+	sysCfg, err := parseTaskXMLConfig(`\Microsoft\Windows\SampleSysTask`, xmlText)
+	if err != nil {
+		t.Fatalf("parseTaskXMLConfig(system) failed: %v", err)
+	}
+	if sysCfg.EnableAudit {
+		t.Fatalf("sysCfg.EnableAudit must be false by default for system task, got true")
+	}
+}
+
+func TestTaskMatchesStatusFilter(t *testing.T) {
+	origPolicy := getGlobalAuditPolicyStore()
+	globalAuditPolicy = newAuditPolicyStore(t.TempDir() + `\audit_policy.json`)
+	defer func() { globalAuditPolicy = origPolicy }()
+
+	customEnabled := Task{Name: `\CustomEnabled`, Location: `\`, Enabled: true}
+	customDisabled := Task{Name: `\CustomDisabled`, Location: `\`, Enabled: false}
+	sysDefault := Task{Name: `\Microsoft\Windows\SysDefault`, Location: `\Microsoft\Windows`, Enabled: true}
+	sysManualAudit := Task{Name: `\Microsoft\Windows\SysManual`, Location: `\Microsoft\Windows`, Enabled: true}
+	if err := setTaskAuditEnabled(sysManualAudit.Name, true); err != nil {
+		t.Fatalf("setTaskAuditEnabled failed: %v", err)
+	}
+
+	// 3: 仅自定义任务
+	if !taskMatchesStatusFilter(customEnabled, 3) || !taskMatchesStatusFilter(customDisabled, 3) {
+		t.Fatalf("filter index 3 should match custom tasks")
+	}
+	if taskMatchesStatusFilter(sysDefault, 3) || taskMatchesStatusFilter(sysManualAudit, 3) {
+		t.Fatalf("filter index 3 should exclude system tasks")
+	}
+
+	// 4: 仅系统任务
+	if taskMatchesStatusFilter(customEnabled, 4) || !taskMatchesStatusFilter(sysDefault, 4) {
+		t.Fatalf("filter index 4 should match system tasks only")
+	}
+
+	// 5: 仅已开审计
+	if !taskMatchesStatusFilter(customEnabled, 5) || !taskMatchesStatusFilter(sysManualAudit, 5) {
+		t.Fatalf("filter index 5 should match custom and manually enabled system tasks")
+	}
+	if taskMatchesStatusFilter(sysDefault, 5) {
+		t.Fatalf("filter index 5 should exclude un-audited system tasks")
 	}
 }
