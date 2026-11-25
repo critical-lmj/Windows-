@@ -9,12 +9,17 @@
 ```text
 main.go                 主窗口、任务查询和任务管理逻辑
 task_archive.go         任务 XML 导入、导出和 ZIP 备份逻辑
-task_audit.go           本地管理操作按月审计流与单任务审计策略管理
-task_eventlog.go        基于 Windows 事件日志的任务执行历史查询与配对
+task_audit.go           本地管理操作按月审计流与单任务审计标记管理
+task_exec_monitor.go    独立后台按天运行日志采集器（logs/exec_YYYY-MM-DD.jsonl）
+autostart.go            全局采集互斥锁、--daemon 守护模式与开机自启
+tray.go                 纯 Win32 系统托盘常驻与右键菜单
+task_eventlog.go        运行历史数据结构与 CSV 导出工具
 main_test.go            主程序的自动化测试
 task_archive_test.go    导入、导出和归档逻辑的自动化测试
-task_audit_test.go      按月审计日志与差异化策略的自动化测试
-task_eventlog_test.go   事件日志解析、配对与导出的自动化测试
+task_audit_test.go      按月审计日志与策略的自动化测试
+task_exec_monitor_test.go 按天运行日志与轮询状态机的自动化测试
+autostart_test.go       互斥锁与开机自启参数的自动化测试
+task_eventlog_test.go   CSV 导出与解析兼容性的自动化测试
 go.mod                  Go 版本与依赖声明
 go.sum                  依赖校验记录
 ```

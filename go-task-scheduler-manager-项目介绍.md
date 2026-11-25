@@ -20,8 +20,9 @@
 - GUI：使用 `github.com/lxn/win` 调用 Win32 API 创建原生窗口。
 - 任务读取：调用系统自带 `schtasks.exe /query /fo LIST /v`（异常时自动回退至 PowerShell COM 接口兜底）。
 - 任务管理：调用 `schtasks.exe` 执行创建、运行、停止、启用、禁用、删除，并支持 ZIP/XML 批量备份导入导出。
-- 运行历史流：静默调用 `wevtutil.exe`（隐藏控制台窗口）读取 `Microsoft-Windows-TaskScheduler/Operational` 事件通道，关联配对 Event 100/200/201/102 记录。
-- 本地审计流：通过异步缓冲通道将运维管理操作写入按月拆分的 `logs/audit_YYYY-MM.jsonl`，并将单任务审计开关持久化至 `logs/audit_policy.json`。
+- 独立运行历史采集：内置/守护采集器定时轮询全部定时任务状态与 `LastRunTime`/`LastResult` 变化，完全不读取系统自带事件日志，按天独立保存至 `logs/exec_YYYY-MM-DD.jsonl`。
+- 后台常驻与开机自启：支持 `--daemon` 无界面后台守护模式（`SYSTEM / ONSTART` 服务器无人登录自启）与纯 Win32 系统托盘常驻（关闭窗口自动隐藏至托盘），通过全局命名互斥锁防止重复采集。
+- 本地审计流：通过异步缓冲通道将运维管理操作写入按月拆分的 `logs/audit_YYYY-MM.jsonl`，并将单任务审计标记持久化至 `logs/audit_policy.json`。
 - 编码兼容：对 `schtasks.exe` 中文输出进行 ANSI/系统代码页解码，CSV 导出统一写入 UTF-8 BOM，避免中文 Windows 与 Excel 乱码。
 - 权限处理：正式版启动时会自动请求管理员权限，以便读取和管理受保护任务。
 - 离线构建：项目内可放置 `.runtime\go` 便携 Go 环境，`build.bat` 优先使用本地 Go。
@@ -67,16 +68,16 @@
 
 适合按任务名、任务描述、任务目录、exe 路径、脚本路径及任务归属快速定位任务。
 
-### 任务日志流、按月审计与 CSV 导出
+### 独立任务运行日志、后台常驻与 CSV 导出
 
-右侧面板提供 `详情`、`运行历史`、`操作审计` 三个视图以及 `启用历史`、`导出日志` 快捷入口：
+右侧面板提供 `详情`、`运行历史`、`操作审计` 三个视图以及 `开机自启`、`导出日志` 快捷入口：
 
-- **运行历史流**：基于 Windows 事件日志 `Microsoft-Windows-TaskScheduler/Operational` 查询任务执行记录，按 `InstanceId` / `TaskInstanceId` / `Correlation.ActivityID` 准确合并单次执行的 100/200/201/102 事件，展示起止时间、耗时、退出代码与执行程序。
-- **按月操作审计流**：管理操作（创建、修改、删除、启停、导入导出、开启/关闭审计等）异步落盘至 `logs/audit_YYYY-MM.jsonl`，按自然月自动滚动拆分；查看与导出时自动跨月倒序聚合读取，并兼容旧版 `logs/audit.jsonl`。
-- **自定义与系统级任务差异化日志审计**：
-  - 自动区分用户自定义定时任务（根目录 `\` 或自定义文件夹）与系统级内置任务（`\Microsoft\` 路径或 `$(@...` 系统资源作者）。
-  - 自定义定时任务默认全部开启日志审计，加载任务列表时自动检测并开启底层事件历史通道；新建/修改向导默认勾选开启日志审计。
-  - 系统级定时任务保留默认未开启状态，避免内置系统任务产生冗余噪声；有需要时可选中任务点击工具栏 **`开启审计` / `关闭审计`** 手动切换，配置持久化保存在 `logs/audit_policy.json`。
+- **独立按天运行留痕（不读取系统自带日志）**：后台采集器默认每 10 秒轮询本机全部定时任务（覆盖自定义任务与系统级任务），基于 `logs/monitor_state.json` 状态基线比对增量变化，自动捕获启动、结束、估算耗时与退出代码，按自然天拆分写入 `logs/exec_YYYY-MM-DD.jsonl`。读取时跨天倒序聚合，并对同一 `InstanceID` 自动合并保留最终状态。
+- **开机自启与系统托盘常驻**：
+  - 点击 **`开机自启`** 可一键注册 `SYSTEM / ONSTART` 后台静默守护任务（`--daemon`）及登录托盘静默任务（`--minimized`），确保服务器无人登录重启也能持续记录日志。
+  - 点击主窗口关闭按钮自动隐藏到右下角系统托盘常驻；托盘右键菜单支持显示主窗口、切换开机自启与彻底退出。
+  - 守护进程与桌面 GUI 通过 Windows 全局命名互斥锁协调，保证同一时间仅有一个采集器运行。
+- **按月操作审计流**：管理操作（创建、修改、删除、启停、导入导出、开启/关闭开机自启等）异步落盘至 `logs/audit_YYYY-MM.jsonl`，按自然月自动滚动拆分；查看与导出时自动跨月倒序聚合读取，并兼容旧版 `logs/audit.jsonl`。
 - **自定义条数 CSV 导出**：点击 `导出日志` 先弹出条数设置窗口（默认 `200`，提示输入 `0` 或 `-1` 表示不限制数量导出全部），导出文件统一带 UTF-8 BOM 防止 Excel 乱码。
 
 ### 任务管理
@@ -156,10 +157,15 @@ main.go                         主程序源码（Win32 界面与任务管理）
 main_test.go                    主程序与筛选/导出解析单元测试
 task_archive.go                 任务 ZIP 备份与 XML 导入导出
 task_archive_test.go            归档与导入导出单元测试
-task_audit.go                   按月操作审计流与单任务审计策略持久化
+task_audit.go                   按月操作审计流与单任务审计标记持久化
 task_audit_test.go              审计日志拆分与策略单元测试
-task_eventlog.go                Windows 事件日志查询、配对与 CSV 导出
-task_eventlog_test.go           事件日志解析配对单元测试
+task_exec_monitor.go            独立后台按天运行日志采集器与状态机
+task_exec_monitor_test.go       按天日志拆分、去重与轮询 diff 测试
+autostart.go                    全局互斥锁、--daemon 守护模式与开机自启
+autostart_test.go               启动参数、自启命令与互斥锁测试
+tray.go                         纯 Win32 系统托盘常驻与右键菜单
+task_eventlog.go                运行历史数据结构与 CSV 导出
+task_eventlog_test.go           历史记录 CSV 导出与兼容性测试
 openspec/                       OpenSpec 需求规格与变更归档
 build.bat                       构建正式版和调试版
 prepare-portable-go.bat         准备便携 Go 环境
@@ -168,8 +174,10 @@ TaskSchedulerManager-debug.exe  调试版程序（不提交源码库）
 README.md                       基础说明
 权限和筛选说明.md               权限、筛选、触发器说明
 docs/Git上传清单与发布指南.md   Git 提交流程与 Release 发布指南
+logs/exec_YYYY-MM-DD.jsonl      按天拆分的全部任务独立运行日志（运行期生成，已忽略）
+logs/monitor_state.json         后台采集器任务状态基线（运行期生成，已忽略）
 logs/audit_YYYY-MM.jsonl        按月拆分的操作审计日志（运行期生成，已忽略）
-logs/audit_policy.json          单任务手动审计开关配置（运行期生成，已忽略）
+logs/audit_policy.json          单任务手动审计标记配置（运行期生成，已忽略）
 .runtime\go                     便携 Go 运行时（已忽略）
 .runtime\gopath                 Go modules 缓存（已忽略）
 debug.log                       程序调试日志（已忽略）
